@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TimePlan Tools
 // @namespace    timeplan-local-tools
-// @version      1.12.3
+// @version      1.12.4
 // @description  Sorted View + Board Planning + function-color magnets + interactive HTML/PDF/CSV export + matched TimePlan font
 // @match        https://ikea.timeplan-software.net/*
 // @updateURL    https://raw.githubusercontent.com/Sachahang/TimePlan-Tools/main/TimePlan-Tools.user.js
