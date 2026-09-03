@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         TimePlan Tools
 // @namespace    timeplan-local-tools
-// @version      1.12.4
-// @description  Sorted View + Board Planning + function-color magnets + interactive HTML/PDF/CSV export + matched TimePlan font
+// @version      1.13.7
+// @description  Partial-absence awareness + effective-start sorting + role-grouped Unassigned + Basic Plan templates + sticky board + interactive HTML/PDF/CSV export
 // @match        https://ikea.timeplan-software.net/*
 // @updateURL    https://raw.githubusercontent.com/Sachahang/TimePlan-Tools/main/TimePlan-Tools.user.js
 // @downloadURL  https://raw.githubusercontent.com/Sachahang/TimePlan-Tools/main/TimePlan-Tools.user.js
@@ -138,6 +138,7 @@
     let activeView = 'sorted';
     let draggedWorkerKey = null;
     const boardAssignments = {};
+    const unassignedCollapsedByDate = {};
 
     const BOARD_AREAS = [
         { group: 'Click & Collect', id: 'cc', areas: [
@@ -234,12 +235,41 @@
         return Math.max(0, timeToMinutes(end) - timeToMinutes(start));
     }
 
+    function getWorkerEffectiveStart(worker) {
+        return worker.effectiveStart || worker.start;
+    }
+
     function sortWorkersByStart(workers) {
         return [...workers].sort((a, b) =>
+            (timeToMinutes(getWorkerEffectiveStart(a)) - timeToMinutes(getWorkerEffectiveStart(b))) ||
             (timeToMinutes(a.start) - timeToMinutes(b.start)) ||
             (timeToMinutes(a.end) - timeToMinutes(b.end)) ||
             a.name.localeCompare(b.name)
         );
+    }
+
+
+    function getUnassignedRoleGroup(worker) {
+        const labels = new Set(getCapabilityLabels(worker));
+        if (labels.has('COORD')) return { id: 'coordinators', label: 'COORDINATORS', priority: 0 };
+        if (labels.has('OA')) return { id: 'order-auditors', label: 'ORDER AUDITORS', priority: 1 };
+        if (labels.has('FLT')) return { id: 'forklift-drivers', label: 'FORKLIFT DRIVERS', priority: 2 };
+        return { id: 'order-pickers', label: 'ORDER PICKERS', priority: 3 };
+    }
+
+    function groupUnassignedWorkers(workers) {
+        const definitions = [
+            { id: 'coordinators', label: 'COORDINATORS', priority: 0 },
+            { id: 'order-auditors', label: 'ORDER AUDITORS', priority: 1 },
+            { id: 'forklift-drivers', label: 'FORKLIFT DRIVERS', priority: 2 },
+            { id: 'order-pickers', label: 'ORDER PICKERS', priority: 3 }
+        ];
+        const groups = new Map(definitions.map(group => [group.id, { ...group, workers: [] }]));
+        workers.forEach(worker => groups.get(getUnassignedRoleGroup(worker).id).workers.push(worker));
+        return definitions
+            .map(group => groups.get(group.id))
+            .filter(group => group.workers.length)
+            .map(group => ({ ...group, workers: sortWorkersByStart(group.workers) }));
     }
 
     function localDateObject(dateString) {
@@ -459,23 +489,94 @@
             }));
     }
 
-    // ---------- Absence ----------
+    // ---------- Absence / effective presence ----------
 
-    function buildAllDayAbsences(absences) {
+    function buildUnavailableAbsences(absences) {
         return absences.filter(absence =>
-            absence.allday === true &&
             absence.physicallyPresent === false &&
             absence.employeeid !== undefined &&
             absence.from && absence.to
         );
     }
 
-    function employeeIsAbsentAllDay(employeeId, date, absences) {
-        return absences.some(absence =>
-            String(absence.employeeid) === String(employeeId) &&
-            date >= getDateKey(absence.from) &&
-            date <= getDateKey(absence.to)
-        );
+    function maxTimestamp(a, b) { return a > b ? a : b; }
+    function minTimestamp(a, b) { return a < b ? a : b; }
+
+    function clipWorktimeDetails(details, start, end) {
+        return (details || []).
+            filter(detail => detail?.start_time && detail?.end_time).
+            map(detail => {
+                const clippedStart = maxTimestamp(detail.start_time, start);
+                const clippedEnd = minTimestamp(detail.end_time, end);
+                if (clippedStart >= clippedEnd) return null;
+                return { ...detail, start_time: clippedStart, end_time: clippedEnd };
+            }).
+            filter(Boolean);
+    }
+
+    function subtractAbsencesFromWorktime(worktime, employeeId, absences) {
+        let blocks = [{
+            ...worktime,
+            details: [...(worktime.details || [])]
+        }];
+
+        const relevantAbsences = absences
+            .filter(absence =>
+                String(absence.employeeid) === String(employeeId) &&
+                absence.from < worktime.end_time &&
+                absence.to > worktime.start_time
+            )
+            .sort((a, b) => a.from.localeCompare(b.from));
+
+        relevantAbsences.forEach(absence => {
+            const nextBlocks = [];
+
+            blocks.forEach(block => {
+                const absenceStart = maxTimestamp(absence.from, block.start_time);
+                const absenceEnd = minTimestamp(absence.to, block.end_time);
+
+                if (absenceStart >= absenceEnd) {
+                    nextBlocks.push(block);
+                    return;
+                }
+
+                if (block.start_time < absenceStart) {
+                    nextBlocks.push({
+                        ...block,
+                        end_time: absenceStart,
+                        details: clipWorktimeDetails(block.details, block.start_time, absenceStart)
+                    });
+                }
+
+                if (absenceEnd < block.end_time) {
+                    nextBlocks.push({
+                        ...block,
+                        start_time: absenceEnd,
+                        details: clipWorktimeDetails(block.details, absenceEnd, block.end_time)
+                    });
+                }
+            });
+
+            blocks = nextBlocks;
+        });
+
+        return blocks.filter(block => block.start_time < block.end_time);
+    }
+
+    function getRelevantAbsencesForWorktime(worktime, employeeId, absences) {
+        return absences
+            .filter(absence =>
+                String(absence.employeeid) === String(employeeId) &&
+                absence.from < worktime.end_time &&
+                absence.to > worktime.start_time
+            )
+            .map(absence => ({
+                start: maxTimestamp(absence.from, worktime.start_time),
+                end: minTimestamp(absence.to, worktime.end_time),
+                allDay: absence.allday === true
+            }))
+            .filter(absence => absence.start < absence.end)
+            .sort((a, b) => a.start.localeCompare(b.start));
     }
 
     function buildDays(employees, absences, functionMap) {
@@ -483,13 +584,37 @@
         employees.forEach(employee => {
             mergeContiguousWorktimes(employee.worktimes || []).forEach(worktime => {
                 const date = getDateKey(worktime.start_time);
-                if (!date || employeeIsAbsentAllDay(employee.employee_id, date, absences)) return;
+                if (!date) return;
+
+                const relevantAbsences = getRelevantAbsencesForWorktime(
+                    worktime,
+                    employee.employee_id,
+                    absences
+                );
+
+                // Keep one row/magnet per logical TimePlan shift. Absences only annotate
+                // that original shift. A full-day absence, or any combination of
+                // absences that leaves no effective working time, removes the shift.
+                const effectiveBlocks = subtractAbsencesFromWorktime(
+                    worktime,
+                    employee.employee_id,
+                    absences
+                );
+
+                if (!effectiveBlocks.length) return;
+                if (relevantAbsences.some(absence => absence.allDay)) return;
+
                 (days[date] ||= []).push({
                     name: employee.employee_name || 'Unknown',
                     employeeId: employee.employee_id,
                     start: worktime.start_time,
                     end: worktime.end_time,
-                    functionSegments: getFunctionSegments(worktime, functionMap)
+                    effectiveStart: effectiveBlocks[0].start_time,
+                    functionSegments: getFunctionSegments(worktime, functionMap),
+                    absenceSegments: relevantAbsences.map(absence => ({
+                        start: absence.start,
+                        end: absence.end
+                    }))
                 });
             });
         });
@@ -528,12 +653,39 @@
         }).join('')}</div>`;
     }
 
+    function renderAbsenceIndicator(worker, compact = false) {
+        const segments = worker.absenceSegments || [];
+        if (!segments.length) return '';
+
+        const marginTop = compact ? '3px' : '4px';
+        const labelSize = compact ? '9px' : '10px';
+        const timeSize = compact ? '10px' : '11px';
+        const padding = compact ? '2px 5px' : '2px 6px';
+
+        return `<div style="display:flex;flex-wrap:wrap;gap:${compact ? '4px' : '6px'};align-items:center;margin-top:${marginTop};">${segments.map(segment => `
+            <span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">
+                <span style="display:inline-flex;align-items:center;justify-content:center;padding:${padding};border:1px solid #C85B52;border-radius:4px;background:#FFF8F7;color:#9E2F28;font-size:${labelSize};font-weight:900;letter-spacing:.25px;line-height:1.2;">ABS</span>
+                <span style="color:#8A4B47;font-size:${timeSize};font-weight:750;line-height:1.2;">${formatTime(segment.start)}&ndash;${formatTime(segment.end)}</span>
+            </span>`).join('')}</div>`;
+    }
+
+    function renderSortedAbsenceInline(worker) {
+        const segments = worker.absenceSegments || [];
+        if (!segments.length) return '';
+
+        const times = segments
+            .map(segment => `${formatTime(segment.start)}&ndash;${formatTime(segment.end)}`)
+            .join(', ');
+
+        return `<span style="display:inline-flex;flex-wrap:wrap;align-items:center;gap:5px;margin-left:8px;color:#8A4B47;font-size:12px;font-weight:700;white-space:normal;"><span style="color:#9E2F28;font-size:11px;font-weight:900;letter-spacing:.2px;">ABS</span><span>${times}</span></span>`;
+    }
+
     function renderSortedView(panel) {
         const workers = currentDays[selectedDate];
         if (!workers?.length) return panel.insertAdjacentHTML('beforeend', '<p>No coworkers found for this day.</p>');
         renderDayHeader(panel, workers);
         const groups = {};
-        sortWorkersByStart(workers).forEach(worker => (groups[formatTime(worker.start)] ||= []).push(worker));
+        sortWorkersByStart(workers).forEach(worker => (groups[formatTime(getWorkerEffectiveStart(worker))] ||= []).push(worker));
 
         Object.entries(groups).forEach(([start, group]) => {
             const element = document.createElement('div');
@@ -541,9 +693,11 @@
             element.innerHTML = `
                 <div><div style="font-size:18px;font-weight:800;color:${TP_BLUE};">${start}</div><div style="font-size:12px;font-weight:700;color:#666;margin-top:3px;">${group.length} coworker${group.length === 1 ? '' : 's'}</div></div>
                 <div>${group.map(worker => `
-                    <div style="display:grid;grid-template-columns:minmax(260px,390px) 150px minmax(320px,1fr);align-items:center;column-gap:24px;padding:5px 0;">
+                    <div style="display:grid;grid-template-columns:minmax(260px,390px) minmax(280px,360px) minmax(320px,1fr);align-items:center;column-gap:20px;padding:5px 0;">
                         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;"><span style="font-size:16px;font-weight:600;">${escapeHTML(worker.name)}</span>${renderCapabilityBadges(worker)}</div>
-                        <span style="color:#555;white-space:nowrap;font-size:14px;font-weight:700;">${formatTime(worker.start)} &rarr; ${formatTime(worker.end)}</span>
+                        <div style="min-width:0;display:flex;flex-wrap:wrap;align-items:center;row-gap:3px;">
+                            <span style="color:#555;white-space:nowrap;font-size:14px;font-weight:700;">${formatTime(worker.start)} &rarr; ${formatTime(worker.end)}</span>${renderSortedAbsenceInline(worker)}
+                        </div>
                         <div>${renderFunctionBadges(worker)}</div>
                     </div>`).join('')}</div>`;
             panel.appendChild(element);
@@ -559,6 +713,7 @@
 
     function resetBoard() {
         boardAssignments[selectedDate] = {};
+        unassignedCollapsedByDate[selectedDate] = false;
         renderPanel();
     }
 
@@ -580,6 +735,98 @@
         return { flow: 'Unassigned', area: 'Unassigned' };
     }
 
+
+    // ---------- Basic Plan templates ----------
+
+    function isEveningTeamWorker(worker) {
+        return timeToMinutes(getWorkerEffectiveStart(worker)) >= (11 * 60);
+    }
+
+    function applyBasicPlan(mode) {
+        const workers = currentDays[selectedDate] || [];
+        const wantEvening = mode === 'evening';
+
+        // Basic Plan is deliberately conservative:
+        // it only assigns coworkers who are still in Unassigned.
+        const eligible = sortWorkersByStart(workers.filter(worker =>
+            getWorkerAssignment(worker) === 'unassigned' &&
+            isEveningTeamWorker(worker) === wantEvening
+        ));
+
+        if (!eligible.length) return;
+
+        const pickers = [];
+
+        eligible.forEach(worker => {
+            const group = getUnassignedRoleGroup(worker);
+
+            if (group.id === 'coordinators' || group.id === 'order-auditors') {
+                assignWorker(getWorkerKey(worker), 'leadership');
+            } else if (group.id === 'forklift-drivers') {
+                assignWorker(
+                    getWorkerKey(worker),
+                    wantEvening ? 'fs-vulpicks' : 'cc-reachtruck'
+                );
+            } else {
+                pickers.push(worker);
+            }
+        });
+
+        // One MH picker by default; use two when the team is large.
+        const mhCount = pickers.length >= 8 ? 2 : (pickers.length ? 1 : 0);
+
+        pickers.forEach((worker, index) => {
+            assignWorker(
+                getWorkerKey(worker),
+                index < mhCount
+                    ? (wantEvening ? 'lcd-mh' : 'cc-mh')
+                    : (wantEvening ? 'lcd-floor' : 'cc-floor')
+            );
+        });
+
+        const remaining = workers.filter(worker => getWorkerAssignment(worker) === 'unassigned').length;
+        if (!remaining) unassignedCollapsedByDate[selectedDate] = true;
+        renderPanel();
+    }
+
+    function createBasicPlanMenu() {
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'position:relative;display:inline-block;';
+
+        const button = document.createElement('button');
+        button.textContent = 'Create Basic Plan';
+        button.style.cssText = `font-family:${TOOL_FONT};background:white;border:1px solid ${TP_BLUE};color:${TP_BLUE};border-radius:7px;padding:9px 14px;font-size:13px;font-weight:800;cursor:pointer;`;
+
+        const menu = document.createElement('div');
+        menu.style.cssText = 'display:none;position:absolute;right:0;top:calc(100% + 5px);min-width:245px;background:white;border:1px solid #ccc;border-radius:7px;box-shadow:0 5px 15px rgba(0,0,0,.18);overflow:hidden;z-index:100000;';
+
+        [
+            ['Morning Default', 'Morning team only - Unassigned coworkers', () => applyBasicPlan('morning')],
+            ['Evening Default', 'Evening team only - Unassigned coworkers', () => applyBasicPlan('evening')]
+        ].forEach(([label, description, action], index) => {
+            const item = document.createElement('button');
+            item.style.cssText = `display:block;width:100%;font-family:${TOOL_FONT};text-align:left;border:none;border-top:${index ? '1px solid #eee' : 'none'};background:white;padding:10px 13px;color:#222;cursor:pointer;`;
+            item.innerHTML = `<div style="font-size:13px;font-weight:800;">${escapeHTML(label)}</div><div style="margin-top:2px;font-size:10px;font-weight:600;color:#777;">${escapeHTML(description)}</div>`;
+            item.onmouseenter = () => item.style.background = '#f4f4f4';
+            item.onmouseleave = () => item.style.background = '#fff';
+            item.onclick = () => {
+                menu.style.display = 'none';
+                action();
+            };
+            menu.appendChild(item);
+        });
+
+        button.onclick = event => {
+            event.stopPropagation();
+            menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+        };
+        menu.onclick = event => event.stopPropagation();
+        document.addEventListener('click', () => menu.style.display = 'none');
+
+        wrapper.append(button, menu);
+        return wrapper;
+    }
+
     // ---------- Board magnets ----------
 
     function createWorkerMagnet(worker) {
@@ -591,7 +838,8 @@
         magnet.innerHTML = `
             <span style="position:absolute;left:0;top:0;bottom:0;width:5px;background:${barBackground};"></span>
             <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:14px;font-weight:800;"><span>${escapeHTML(worker.name)}</span>${renderCapabilityBadges(worker)}</div>
-            <div style="margin-top:4px;font-size:12px;"><span style="font-weight:900;color:#222;">${formatTime(worker.start)}</span><span style="font-weight:700;color:#999;"> &rarr; </span><span style="font-weight:700;color:#666;">${formatTime(worker.end)}</span></div>`;
+            <div style="margin-top:4px;font-size:12px;"><span style="font-weight:900;color:#222;">${formatTime(worker.start)}</span><span style="font-weight:700;color:#999;"> &rarr; </span><span style="font-weight:700;color:#666;">${formatTime(worker.end)}</span></div>
+            ${renderAbsenceIndicator(worker, true)}`;
 
         magnet.addEventListener('dragstart', event => {
             draggedWorkerKey = key;
@@ -618,27 +866,17 @@
 
         const container = document.createElement('div');
         container.style.cssText = 'display:flex;flex-wrap:wrap;min-height:45px;';
-        let eveningDividerAdded = false;
 
-        sortWorkersByStart(workers).forEach(worker => {
-            const startTime = formatTime(worker.start);
-            const [hour, minute] = startTime.split(':').map(Number);
-            const startMinutes = (hour * 60) + minute;
-            const isEveningTeam = startMinutes >= (11 * 60);
-
-            if (
-                areaId !== 'unassigned' &&
-                !eveningDividerAdded &&
-                isEveningTeam
-            ) {
+        if (unassigned) {
+            groupUnassignedWorkers(workers).forEach((group, groupIndex) => {
                 const divider = document.createElement('div');
                 divider.style.cssText = `
                     flex-basis:100%;
                     display:flex;
                     align-items:center;
                     gap:8px;
-                    margin:7px 3px 3px;
-                    color:#777;
+                    margin:${groupIndex ? '9px' : '3px'} 3px 3px;
+                    color:#666;
                     font-size:9px;
                     font-weight:900;
                     letter-spacing:.45px;
@@ -646,15 +884,45 @@
                 `;
                 divider.innerHTML = `
                     <span style="flex:1;height:1px;background:#D4D4D4;"></span>
-                    <span>Evening Team</span>
+                    <span>${escapeHTML(group.label)} &middot; ${group.workers.length}</span>
                     <span style="flex:1;height:1px;background:#D4D4D4;"></span>
                 `;
                 container.appendChild(divider);
-                eveningDividerAdded = true;
-            }
+                group.workers.forEach(worker => container.appendChild(createWorkerMagnet(worker)));
+            });
+        } else {
+            let eveningDividerAdded = false;
+            sortWorkersByStart(workers).forEach(worker => {
+                const effectiveStartTime = formatTime(getWorkerEffectiveStart(worker));
+                const [hour, minute] = effectiveStartTime.split(':').map(Number);
+                const startMinutes = (hour * 60) + minute;
+                const isEveningTeam = startMinutes >= (11 * 60);
 
-            container.appendChild(createWorkerMagnet(worker));
-        });
+                if (!eveningDividerAdded && isEveningTeam) {
+                    const divider = document.createElement('div');
+                    divider.style.cssText = `
+                        flex-basis:100%;
+                        display:flex;
+                        align-items:center;
+                        gap:8px;
+                        margin:7px 3px 3px;
+                        color:#777;
+                        font-size:9px;
+                        font-weight:900;
+                        letter-spacing:.45px;
+                        text-transform:uppercase;
+                    `;
+                    divider.innerHTML = `
+                        <span style="flex:1;height:1px;background:#D4D4D4;"></span>
+                        <span>Evening Team</span>
+                        <span style="flex:1;height:1px;background:#D4D4D4;"></span>
+                    `;
+                    container.appendChild(divider);
+                    eveningDividerAdded = true;
+                }
+                container.appendChild(createWorkerMagnet(worker));
+            });
+        }
         if (!workers.length) container.innerHTML = '<div style="width:100%;text-align:center;padding:14px 5px;color:#999;font-size:12px;font-weight:700;">Drop here</div>';
         zone.appendChild(container);
 
@@ -730,6 +998,11 @@
                 employeeId: worker.employeeId,
                 start: formatTime(worker.start),
                 end: formatTime(worker.end),
+                effectiveStart: formatTime(getWorkerEffectiveStart(worker)),
+                absences: (worker.absenceSegments || []).map(segment => ({
+                    start: formatTime(segment.start),
+                    end: formatTime(segment.end)
+                })),
                 badges: getFunctionBadges(worker),
                 functionBar: getFunctionBarBackground(worker)
             })),
@@ -760,12 +1033,12 @@
 ${data.stylesheetLinks || ''}
 <style>
 ${escapeStyleClose(data.fontFaceCSS)}
-*{box-sizing:border-box}body,button,input,select,textarea{font-family:${data.fontFamily || TOOL_FONT}!important}body{margin:0;padding:24px;background:#F3F4F5;color:#222;font-family:${data.fontFamily || TOOL_FONT}!important}.header{position:relative;min-height:112px;margin-bottom:20px;padding-right:470px}.title{font-size:26px;font-weight:800;color:${TP_BLUE}}.subtitle{margin-top:4px;font-size:15px;font-weight:700}.meta{margin-top:4px;color:#777;font-size:12px}.actions{position:absolute;top:0;right:0;display:flex;align-items:center;justify-content:flex-end;gap:9px;padding:0}button{font-family:inherit;border-radius:7px;padding:9px 13px;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap}.primary{border:1px solid ${TP_BLUE};background:${TP_BLUE};color:white}.secondary{border:1px solid #AAA;background:white;color:#333}.status{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;font-size:12px;color:#666}.unassigned,.leadership,.area{border-radius:8px;padding:9px}.unassigned-wrapper{position:static;margin-bottom:12px}.unassigned-sticky{position:sticky;top:8px;z-index:60;margin-bottom:12px;padding:4px 0;background:#F3F4F5;border-radius:9px;box-shadow:0 8px 16px -15px rgba(0,0,0,.7);max-height:38vh;overflow-y:auto;overscroll-behavior:contain}.unassigned{margin-bottom:0;border:2px dashed #AAA;background:#FFF}.leadership{margin-bottom:16px;border:2px solid ${TP_BLUE};background:${TP_LIGHT_BLUE}}.board{display:grid;grid-template-columns:repeat(3,minmax(280px,1fr));gap:14px;align-items:start}.flow{border:1px solid #D5D5D5;border-radius:9px;overflow:hidden;background:#FFF}.flow-header{display:flex;justify-content:space-between;align-items:center;padding:12px 13px;background:${TP_BLUE};color:white;font-size:15px;font-weight:800}.flow-count,.area-count{display:inline-flex;justify-content:center;align-items:center;min-width:24px;height:24px;padding:0 6px;border-radius:999px;font-size:11px;font-weight:800}.flow-count{background:white;color:${TP_BLUE}}.area-count{background:#E6E6E6;color:#333}.flow-content{display:flex;flex-direction:column;gap:10px;padding:10px}.area{min-height:105px;background:#F8F8F8;border:2px dashed #C5C5C5}.area-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;font-size:13px;font-weight:800}.cards{display:flex;flex-wrap:wrap;min-height:45px}.worker{position:relative;overflow:hidden;margin:4px;min-width:145px;max-width:235px;padding:8px 10px 8px 14px;background:white;border:1px solid #C8C8C8;border-radius:7px;box-shadow:0 2px 5px rgba(0,0,0,.12);cursor:grab;user-select:none}.function-bar{position:absolute;left:0;top:0;bottom:0;width:5px}.worker:active{cursor:grabbing}.worker-name{display:flex;flex-wrap:wrap;align-items:center;gap:5px;font-size:14px;font-weight:800}.worker-time{margin-top:4px;font-size:12px}.worker-start{font-weight:900;color:#222}.worker-arrow{font-weight:700;color:#999}.worker-end{font-weight:700;color:#666}.shift-divider{flex-basis:100%;display:flex;align-items:center;gap:8px;margin:7px 3px 3px;color:#777;font-size:9px;font-weight:900;letter-spacing:.45px;text-transform:uppercase}.shift-divider:before,.shift-divider:after{content:'';flex:1;height:1px;background:#D4D4D4}.badge{display:inline-flex;align-items:center;justify-content:center;height:19px;padding:0 6px;border-radius:999px;font-size:9px;line-height:1;font-weight:800;white-space:nowrap}.empty{width:100%;text-align:center;padding:14px 5px;color:#999;font-size:12px;font-weight:700}.drop-active{border-color:${TP_BLUE}!important;background:rgba(0,88,163,.10)!important}@media(max-width:1050px){.board{grid-template-columns:1fr}}@media(max-width:900px){.header{min-height:0;padding-right:0;padding-top:72px}.actions{top:0;right:0}}@media(max-width:620px){body{padding:16px}.header{padding-top:112px}.actions{left:0;right:0;justify-content:flex-end;flex-wrap:wrap}}
+*{box-sizing:border-box}body,button,input,select,textarea{font-family:${data.fontFamily || TOOL_FONT}!important}body{margin:0;padding:24px;background:#F3F4F5;color:#222;font-family:${data.fontFamily || TOOL_FONT}!important}.header{position:relative;min-height:112px;margin-bottom:20px;padding-right:625px}.title{font-size:26px;font-weight:800;color:${TP_BLUE}}.subtitle{margin-top:4px;font-size:15px;font-weight:700}.meta{margin-top:4px;color:#777;font-size:12px}.actions{position:absolute;top:0;right:0;display:flex;align-items:center;justify-content:flex-end;gap:9px;padding:0}button{font-family:inherit;border-radius:7px;padding:9px 13px;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap}.primary{border:1px solid ${TP_BLUE};background:${TP_BLUE};color:white}.secondary{border:1px solid #AAA;background:white;color:#333}.status{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;font-size:12px;color:#666}.unassigned,.leadership,.area{border-radius:8px;padding:9px}.unassigned-wrapper{position:static;margin-bottom:12px}.unassigned-sticky{position:sticky;top:8px;z-index:60;margin-bottom:12px;padding:4px 0;background:#F3F4F5;border-radius:9px;box-shadow:0 8px 16px -15px rgba(0,0,0,.7);overscroll-behavior:contain}.unassigned{margin-bottom:0;border:2px dashed #AAA;background:#FFF}.leadership{margin-bottom:16px;border:2px solid ${TP_BLUE};background:${TP_LIGHT_BLUE}}.board{display:grid;grid-template-columns:repeat(3,minmax(280px,1fr));gap:14px;align-items:start}.flow{border:1px solid #D5D5D5;border-radius:9px;overflow:visible;background:#FFF}.flow-header{position:sticky;top:var(--flow-sticky-top,8px);z-index:45;display:flex;justify-content:space-between;align-items:center;padding:12px 13px;background:rgba(0,88,163,.93);color:white;font-size:15px;font-weight:800;border-radius:8px 8px 0 0;box-shadow:0 6px 12px -12px rgba(0,0,0,.8)}.flow-count,.area-count{display:inline-flex;justify-content:center;align-items:center;min-width:24px;height:24px;padding:0 6px;border-radius:999px;font-size:11px;font-weight:800}.flow-count{background:white;color:${TP_BLUE}}.area-count{background:#E6E6E6;color:#333}.flow-content{display:flex;flex-direction:column;gap:10px;padding:10px}.area{min-height:105px;background:#F8F8F8;border:2px dashed #C5C5C5}.area-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;font-size:13px;font-weight:800}.cards{display:flex;flex-wrap:wrap;min-height:45px}.worker{position:relative;overflow:hidden;margin:4px;min-width:145px;max-width:235px;padding:8px 10px 8px 14px;background:white;border:1px solid #C8C8C8;border-radius:7px;box-shadow:0 2px 5px rgba(0,0,0,.12);cursor:grab;user-select:none}.function-bar{position:absolute;left:0;top:0;bottom:0;width:5px}.worker:active{cursor:grabbing}.worker-name{display:flex;flex-wrap:wrap;align-items:center;gap:5px;font-size:14px;font-weight:800}.worker-time{margin-top:4px;font-size:12px}.worker-start{font-weight:900;color:#222}.worker-arrow{font-weight:700;color:#999}.worker-end{font-weight:700;color:#666}.worker-absence{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-top:3px}.absence-item{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.absence-label{display:inline-flex;align-items:center;justify-content:center;padding:2px 5px;border:1px solid #C85B52;border-radius:4px;background:#FFF8F7;color:#9E2F28;font-size:9px;font-weight:900;letter-spacing:.25px;line-height:1.2}.absence-time{color:#8A4B47;font-size:10px;font-weight:700;line-height:1.2}.role-divider,.shift-divider{flex-basis:100%;display:flex;align-items:center;gap:8px;margin:7px 3px 3px;color:#777;font-size:9px;font-weight:900;letter-spacing:.45px;text-transform:uppercase}.role-divider:before,.role-divider:after,.shift-divider:before,.shift-divider:after{content:'';flex:1;height:1px;background:#D4D4D4}.badge{display:inline-flex;align-items:center;justify-content:center;height:19px;padding:0 6px;border-radius:999px;font-size:9px;line-height:1;font-weight:800;white-space:nowrap}.empty{width:100%;text-align:center;padding:14px 5px;color:#999;font-size:12px;font-weight:700}.drop-active{border-color:${TP_BLUE}!important;background:rgba(0,88,163,.10)!important}@media(max-width:1050px){.board{grid-template-columns:1fr}}@media(max-width:900px){.header{min-height:0;padding-right:0;padding-top:72px}.actions{top:0;right:0}}@media(max-width:620px){body{padding:16px}.header{padding-top:112px}.actions{left:0;right:0;justify-content:flex-end;flex-wrap:wrap}}
 </style>
 </head>
 <body>
 <script id="tp-state" type="application/json">${assignmentsJSON}</script>
-<div class="header"><div><div class="title">Daily Board Plan</div><div class="subtitle" id="dateLabel"></div><div class="meta">Department ${escapeHTML(data.department)} &middot; Interactive copy</div></div><div class="actions"><button class="primary" id="saveButton">Save HTML</button><button class="secondary" id="pdfButton">Export PDF</button><button class="secondary" id="resetButton">Reset</button></div></div>
+<div class="header"><div><div class="title">Daily Board Plan</div><div class="subtitle" id="dateLabel"></div><div class="meta">Department ${escapeHTML(data.department)} &middot; Interactive copy</div></div><div class="actions"><div style="position:relative"><button class="secondary" id="basicPlanButton" style="border-color:${TP_BLUE};color:${TP_BLUE}">Create Basic Plan</button><div id="basicPlanMenu" style="display:none;position:absolute;right:0;top:calc(100% + 5px);min-width:245px;background:white;border:1px solid #CCC;border-radius:7px;box-shadow:0 5px 15px rgba(0,0,0,.18);overflow:hidden;z-index:100000"><button class="basic-plan-choice" data-mode="morning" style="display:block;width:100%;text-align:left;border:none;background:white;padding:10px 13px;color:#222"><strong>Morning Default</strong><span style="display:block;margin-top:2px;font-size:10px;color:#777">Morning team only - Unassigned coworkers</span></button><button class="basic-plan-choice" data-mode="evening" style="display:block;width:100%;text-align:left;border:none;border-top:1px solid #EEE;background:white;padding:10px 13px;color:#222"><strong>Evening Default</strong><span style="display:block;margin-top:2px;font-size:10px;color:#777">Evening team only - Unassigned coworkers</span></button></div></div><button class="primary" id="saveButton">Save HTML</button><button class="secondary" id="pdfButton">Export PDF</button><button class="secondary" id="resetButton">Reset</button></div></div>
 <div class="status"><span id="coworkerCount"></span><span id="lastChange"></span></div>
 <div id="unassignedWrapper"><div id="unassigned"></div></div><div id="leadership"></div><div id="board" class="board"></div>
 <script>
@@ -773,49 +1046,56 @@ const DATA=${dataJSON};
 let assignments={};
 try{assignments=JSON.parse(document.getElementById('tp-state').textContent||'{}')}catch{assignments={}}
 let draggedKey=null;
+let unassignedCollapsed=false;
 function esc(v){return String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;')}
 function contrast(hex){const c=String(hex||'#666666').replace('#','');const r=parseInt(c.substring(0,2),16),g=parseInt(c.substring(2,4),16),b=parseInt(c.substring(4,6),16);return((r*299+g*587+b*114)/1000)>155?'#222':'#FFF'}
 function assignment(w){return assignments[w.key]||'unassigned'}
 function workersFor(area){return DATA.workers.filter(w=>assignment(w)===area)}
+function roleGroup(w){const labels=new Set((w.badges||[]).map(b=>b.label));if(labels.has('COORD'))return{id:'coordinators',label:'COORDINATORS'};if(labels.has('OA'))return{id:'order-auditors',label:'ORDER AUDITORS'};if(labels.has('FLT'))return{id:'forklift-drivers',label:'FORKLIFT DRIVERS'};return{id:'order-pickers',label:'ORDER PICKERS'}}
+function timeMinutes(v){const p=String(v||'00:00').split(':').map(Number);return((p[0]||0)*60)+(p[1]||0)}
+function sortByEffectiveStart(ws){return[...ws].sort((a,b)=>timeMinutes(a.effectiveStart||a.start)-timeMinutes(b.effectiveStart||b.start)||timeMinutes(a.start)-timeMinutes(b.start)||timeMinutes(a.end)-timeMinutes(b.end)||a.name.localeCompare(b.name))}
+function groupedUnassigned(ws){const defs=[['coordinators','COORDINATORS'],['order-auditors','ORDER AUDITORS'],['forklift-drivers','FORKLIFT DRIVERS'],['order-pickers','ORDER PICKERS']];return defs.map(([id,label])=>({id,label,workers:sortByEffectiveStart(ws.filter(w=>roleGroup(w).id===id))})).filter(g=>g.workers.length)}
+function applyBasicPlan(mode){const wantEvening=mode==='evening';const eligible=sortByEffectiveStart(DATA.workers.filter(w=>assignment(w)==='unassigned'&&((timeMinutes(w.effectiveStart||w.start)>=660)===wantEvening)));if(!eligible.length)return;const pickers=[];eligible.forEach(w=>{const g=roleGroup(w);if(g.id==='coordinators'||g.id==='order-auditors')assignments[w.key]='leadership';else if(g.id==='forklift-drivers')assignments[w.key]=wantEvening?'fs-vulpicks':'cc-reachtruck';else pickers.push(w)});const mhCount=pickers.length>=8?2:(pickers.length?1:0);pickers.forEach((w,i)=>{assignments[w.key]=i<mhCount?(wantEvening?'lcd-mh':'cc-mh'):(wantEvening?'lcd-floor':'cc-floor')});if(!workersFor('unassigned').length)unassignedCollapsed=true;document.getElementById('lastChange').textContent=(wantEvening?'Evening':'Morning')+' basic plan created';render()}
 function badgesHTML(w,compact=false){return(w.badges||[]).map(b=>{const c=b.color||'#666666';return '<span class="badge" title="'+esc(b.title)+'" style="background:'+c+';border:1px solid '+c+';color:'+contrast(c)+';height:'+(compact?'16px':'19px')+';padding:0 '+(compact?'4px':'6px')+';font-size:'+(compact?'7px':'9px')+';">'+esc(b.label)+'</span>'}).join('')}
-function workerHTML(w){return '<div class="worker" draggable="true" data-worker-key="'+esc(w.key)+'"><span class="function-bar" style="background:'+w.functionBar+'"></span><div class="worker-name"><span>'+esc(w.name)+'</span>'+badgesHTML(w)+'</div><div class="worker-time"><span class="worker-start">'+esc(w.start)+'</span><span class="worker-arrow"> &rarr; </span><span class="worker-end">'+esc(w.end)+'</span></div></div>'}
+function absenceHTML(w,compact=false){const items=w.absences||[];if(!items.length)return '';return '<div class="worker-absence">'+items.map(a=>'<span class="absence-item"><span class="absence-label">ABS</span><span class="absence-time">'+esc(a.start)+'&ndash;'+esc(a.end)+'</span></span>').join('')+'</div>'}
+function workerHTML(w){return '<div class="worker" draggable="true" data-worker-key="'+esc(w.key)+'"><span class="function-bar" style="background:'+w.functionBar+'"></span><div class="worker-name"><span>'+esc(w.name)+'</span>'+badgesHTML(w)+'</div><div class="worker-time"><span class="worker-start">'+esc(w.start)+'</span><span class="worker-arrow"> &rarr; </span><span class="worker-end">'+esc(w.end)+'</span></div>'+absenceHTML(w,true)+'</div>'}
 function cardsHTML(ws,areaId){
     if(!ws.length)return '<div class="empty">Drop here</div>';
-
+    if(areaId==='unassigned'){
+        return groupedUnassigned(ws).map(g=>'<div class="role-divider"><span>'+esc(g.label)+' &middot; '+g.workers.length+'</span></div>'+g.workers.map(workerHTML).join('')).join('')
+    }
     let eveningDividerAdded=false;
-
-    return ws.map(w=>{
-        const parts=String(w.start||'00:00').split(':').map(Number);
-        const startMinutes=((parts[0]||0)*60)+(parts[1]||0);
+    return sortByEffectiveStart(ws).map(w=>{
+        const startMinutes=timeMinutes(w.effectiveStart||w.start);
         const isEveningTeam=startMinutes>=660;
-
         let divider='';
-
-        if(
-            areaId!=='unassigned' &&
-            !eveningDividerAdded &&
-            isEveningTeam
-        ){
-            divider='<div class="shift-divider evening-divider" aria-hidden="true"><span>Evening Team</span></div>';
-            eveningDividerAdded=true;
-        }
-
-        return divider+workerHTML(w);
+        if(!eveningDividerAdded&&isEveningTeam){divider='<div class="shift-divider evening-divider" aria-hidden="true"><span>Evening Team</span></div>';eveningDividerAdded=true}
+        return divider+workerHTML(w)
     }).join('')
 }
-function makeZone(id,name,extra='area'){const ws=workersFor(id);return '<div class="'+extra+' dropzone" data-area-id="'+id+'"><div class="area-header"><span>'+esc(name)+'</span><span class="area-count">'+ws.length+'</span></div><div class="cards">'+cardsHTML(ws)+'</div></div>'}
+function makeZone(id,name,extra='area'){const ws=workersFor(id);if(id==='unassigned'&&unassignedCollapsed){return '<div class="'+extra+' dropzone" data-area-id="'+id+'" style="min-height:0"><div class="area-header" style="margin-bottom:0"><span>'+esc(name)+' <span class="area-count">'+ws.length+'</span> <span style="color:#777;font-size:11px;font-weight:700;margin-left:6px">'+ws.length+' remaining</span></span><button class="secondary" id="showUnassigned" style="padding:5px 10px;font-size:11px">Show</button></div></div>'}const toggle=id==='unassigned'?'<button class="secondary" id="hideUnassigned" style="margin-left:auto;margin-right:7px;padding:4px 9px;font-size:10px">Hide</button>':'';return '<div class="'+extra+' dropzone" data-area-id="'+id+'"><div class="area-header"><span>'+esc(name)+'</span>'+toggle+'<span class="area-count">'+ws.length+'</span></div><div class="cards">'+cardsHTML(ws,id)+'</div></div>'}
 function render(){
     document.getElementById('dateLabel').textContent=DATA.formattedDate;
     document.getElementById('coworkerCount').textContent=DATA.workers.length+' coworker blocks';
 
     const unassignedWrapper=document.getElementById('unassignedWrapper');
     const pendingUnassigned=workersFor('unassigned').length>0;
+    if(!pendingUnassigned)unassignedCollapsed=true;
 
     if(unassignedWrapper){
-        unassignedWrapper.className=pendingUnassigned?'unassigned-sticky':'unassigned-wrapper';
-    }document.getElementById('unassigned').innerHTML=makeZone('unassigned','UNASSIGNED','unassigned');document.getElementById('leadership').innerHTML=makeZone('leadership','ORDER AUDITOR - COORDINATOR','leadership');document.getElementById('board').innerHTML=DATA.areas.map(group=>{const count=group.areas.reduce((t,a)=>t+workersFor(a.id).length,0);return '<section class="flow"><div class="flow-header"><span>'+esc(group.group)+'</span><span class="flow-count">'+count+'</span></div><div class="flow-content">'+group.areas.map(a=>makeZone(a.id,a.name)).join('')+'</div></section>'}).join('');bindDragDrop()}
+        unassignedWrapper.className='unassigned-sticky';
+        unassignedWrapper.style.maxHeight=unassignedCollapsed?'none':'38vh';
+        unassignedWrapper.style.overflowY=unassignedCollapsed?'visible':'auto';
+    }
+    document.getElementById('unassigned').innerHTML=makeZone('unassigned','UNASSIGNED','unassigned');
+    document.getElementById('leadership').innerHTML=makeZone('leadership','ORDER AUDITOR - COORDINATOR','leadership');
+    document.getElementById('board').innerHTML=DATA.areas.map(group=>{const count=group.areas.reduce((t,a)=>t+workersFor(a.id).length,0);return '<section class="flow"><div class="flow-header"><span>'+esc(group.group)+'</span><span class="flow-count">'+count+'</span></div><div class="flow-content">'+group.areas.map(a=>makeZone(a.id,a.name)).join('')+'</div></section>'}).join('');
+    const hide=document.getElementById('hideUnassigned');if(hide)hide.onclick=e=>{e.stopPropagation();unassignedCollapsed=true;render()};
+    const show=document.getElementById('showUnassigned');if(show)show.onclick=e=>{e.stopPropagation();unassignedCollapsed=false;render()};
+    updateFlowStickyTop();requestAnimationFrame(updateFlowStickyTop);bindDragDrop()}
+function updateFlowStickyTop(){const wrapper=document.getElementById('unassignedWrapper');const top=wrapper?Math.ceil(wrapper.getBoundingClientRect().height)+16:8;document.documentElement.style.setProperty('--flow-sticky-top',top+'px')}
 function bindDragDrop(){document.querySelectorAll('.worker').forEach(el=>{el.addEventListener('dragstart',e=>{draggedKey=el.dataset.workerKey;e.dataTransfer.setData('text/plain',draggedKey);el.style.opacity='.45'});el.addEventListener('dragend',()=>{draggedKey=null;el.style.opacity='1'})});document.querySelectorAll('.dropzone').forEach(zone=>{zone.addEventListener('dragover',e=>{e.preventDefault();zone.classList.add('drop-active')});zone.addEventListener('dragleave',e=>{if(!zone.contains(e.relatedTarget))zone.classList.remove('drop-active')});zone.addEventListener('drop',e=>{e.preventDefault();const key=e.dataTransfer.getData('text/plain')||draggedKey;if(!key)return;assignments[key]=zone.dataset.areaId;document.getElementById('lastChange').textContent='Last change: '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});render()})})}
-function resetBoard(){if(!confirm('Move all coworkers back to Unassigned?'))return;assignments={};document.getElementById('lastChange').textContent='Board reset';render()}
+function resetBoard(){if(!confirm('Move all coworkers back to Unassigned?'))return;assignments={};unassignedCollapsed=false;document.getElementById('lastChange').textContent='Board reset';render()}
 function saveHTML(){document.getElementById('tp-state').textContent=JSON.stringify(assignments);const html='<!DOCTYPE html>\\n'+document.documentElement.outerHTML;const blob=new Blob([html],{type:'text/html;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='TimePlan-Interactive-Board-'+DATA.department+'-'+DATA.date+'.html';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 
 // Dedicated PDF renderer: same visual language as the TimePlan Tools PDF,
@@ -825,7 +1105,7 @@ function exportPDF(){
     if(!popup){alert('The browser blocked the print window.');return}
 
     function printWorker(w){
-        return '<div class="pworker"><span class="pbar" style="background:'+w.functionBar+'"></span><div class="pname"><span>'+esc(w.name)+'</span>'+badgesHTML(w,true)+'</div><div class="ptime"><strong>'+esc(w.start)+'</strong><span> &rarr; '+esc(w.end)+'</span></div></div>'
+        return '<div class="pworker"><span class="pbar" style="background:'+w.functionBar+'"></span><div class="pname"><span>'+esc(w.name)+'</span>'+badgesHTML(w,true)+'</div><div class="ptime"><strong>'+esc(w.start)+'</strong><span> &rarr; '+esc(w.end)+'</span></div>'+absenceHTML(w,true)+'</div>'
     }
 
     function printArea(name,ws,areaId){
@@ -833,7 +1113,7 @@ function exportPDF(){
 
         const workersHTML=ws.length
             ? ws.map(w=>{
-                const parts=String(w.start||'00:00').split(':').map(Number);
+                const parts=String(w.effectiveStart||w.start||'00:00').split(':').map(Number);
                 const startMinutes=((parts[0]||0)*60)+(parts[1]||0);
                 const isEveningTeam=startMinutes>=660;
 
@@ -893,7 +1173,7 @@ function exportPDF(){
         '.pworker{position:relative;overflow:hidden;min-width:110px;max-width:160px;padding:5px 6px 5px 10px;background:white!important;border:1px solid #CCC;border-radius:5px}'+
         '.pbar{position:absolute;left:0;top:0;bottom:0;width:4px}'+
         '.pname{display:flex;flex-wrap:wrap;align-items:center;gap:3px;font-weight:800}'+
-        '.ptime{margin-top:2px;font-size:9px}.ptime strong{color:#222;font-weight:900}.ptime span{color:#666;font-weight:700}'+
+        '.ptime{margin-top:2px;font-size:9px}.ptime strong{color:#222;font-weight:900}.ptime span{color:#666;font-weight:700}.worker-absence{display:flex;flex-wrap:wrap;gap:3px;align-items:center;margin-top:2px}.absence-item{display:inline-flex;align-items:center;gap:3px}.absence-label{padding:1px 3px;border:1px solid #C85B52;border-radius:3px;background:#FFF8F7!important;color:#9E2F28!important;font-size:6px;font-weight:900}.absence-time{color:#8A4B47!important;font-size:7px;font-weight:700}'+
         '.badge{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;font-weight:800;white-space:nowrap}'+
         '</style></head><body>'+
         '<div class="pheader"><div><div class="ptitle">DAILY BOARD PLAN</div><div class="pdate">'+esc(DATA.formattedDate)+'</div></div>'+
@@ -947,8 +1227,15 @@ function exportPDF(){
     setTimeout(waitForFontsAndPrint,150);
 }
 
+const basicPlanButton=document.getElementById('basicPlanButton');
+const basicPlanMenu=document.getElementById('basicPlanMenu');
+basicPlanButton.addEventListener('click',e=>{e.stopPropagation();basicPlanMenu.style.display=basicPlanMenu.style.display==='block'?'none':'block'});
+basicPlanMenu.addEventListener('click',e=>e.stopPropagation());
+document.querySelectorAll('.basic-plan-choice').forEach(button=>{button.addEventListener('mouseenter',()=>button.style.background='#F4F4F4');button.addEventListener('mouseleave',()=>button.style.background='#FFF');button.addEventListener('click',()=>{basicPlanMenu.style.display='none';applyBasicPlan(button.dataset.mode)})});
+document.addEventListener('click',()=>basicPlanMenu.style.display='none');
 document.getElementById('saveButton').addEventListener('click',saveHTML);
 document.getElementById('pdfButton').addEventListener('click',exportPDF);
+window.addEventListener('resize',()=>requestAnimationFrame(updateFlowStickyTop));
 document.getElementById('resetButton').addEventListener('click',resetBoard);
 render();
 <\/script>
@@ -1026,7 +1313,8 @@ render();
         toolbar.style.cssText = 'display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;';
         toolbar.innerHTML = `<div><div style="font-size:18px;font-weight:800;">Daily Board Planning</div><div style="font-size:12px;color:#777;margin-top:3px;">Department ${BOARD_DEPARTMENT_CODE}</div></div>`;
         const actions = document.createElement('div');
-        actions.style.cssText = 'display:flex;gap:8px;align-items:center;';
+        actions.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;';
+        actions.appendChild(createBasicPlanMenu());
         actions.appendChild(createExportMenu());
         const reset = document.createElement('button');
         reset.textContent = 'Reset Board';
@@ -1040,32 +1328,55 @@ render();
         unassigned.id = 'tp-sticky-unassigned';
 
         const hasPendingUnassigned = byArea.unassigned.length > 0;
+        if (!hasPendingUnassigned) unassignedCollapsedByDate[selectedDate] = true;
+        const unassignedCollapsed = unassignedCollapsedByDate[selectedDate] === true;
 
-        unassigned.style.cssText = hasPendingUnassigned
-            ? `
-                position:sticky;
-                top:8px;
-                z-index:60;
-                margin-bottom:14px;
-                padding:4px 0;
-                background:white;
-                border-radius:9px;
-                box-shadow:0 8px 16px -15px rgba(0,0,0,.65);
-                max-height:38vh;
-                overflow-y:auto;
-                overscroll-behavior:contain;
-            `
-            : `
-                position:static;
-                margin-bottom:14px;
-                padding:0;
-                background:transparent;
-                box-shadow:none;
-                max-height:none;
-                overflow:visible;
-            `;
+        unassigned.style.cssText = `
+            position:sticky;
+            top:8px;
+            z-index:60;
+            margin-bottom:14px;
+            padding:4px 0;
+            background:white;
+            border-radius:9px;
+            box-shadow:0 8px 16px -15px rgba(0,0,0,.65);
+            max-height:${unassignedCollapsed ? 'none' : '38vh'};
+            overflow-y:${unassignedCollapsed ? 'visible' : 'auto'};
+            overscroll-behavior:contain;
+        `;
 
-        unassigned.appendChild(createDropZone('unassigned', 'UNASSIGNED', byArea.unassigned));
+        if (unassignedCollapsed) {
+            const compact = document.createElement('div');
+            compact.dataset.areaId = 'unassigned';
+            compact.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 11px;border:2px dashed #aaa;border-radius:8px;background:#fafafa;font-size:13px;font-weight:800;';
+            compact.innerHTML = `<div style="display:flex;align-items:center;gap:8px;"><span>UNASSIGNED</span><span style="display:inline-flex;align-items:center;justify-content:center;min-width:23px;height:23px;padding:0 6px;border-radius:999px;background:#e6e6e6;color:#333;font-size:12px;">${byArea.unassigned.length}</span><span style="color:#777;font-size:11px;font-weight:700;">${byArea.unassigned.length === 1 ? '1 remaining' : `${byArea.unassigned.length} remaining`}</span></div>`;
+            const showButton = document.createElement('button');
+            showButton.textContent = 'Show';
+            showButton.style.cssText = `font-family:${TOOL_FONT};background:white;border:1px solid #aaa;color:#444;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:800;cursor:pointer;`;
+            showButton.onclick = event => { event.stopPropagation(); unassignedCollapsedByDate[selectedDate] = false; renderPanel(); };
+            compact.appendChild(showButton);
+            compact.addEventListener('dragover', event => { event.preventDefault(); compact.style.borderColor = TP_BLUE; compact.style.background = 'rgba(0,88,163,.10)'; });
+            compact.addEventListener('dragleave', () => { compact.style.borderColor = '#aaa'; compact.style.background = '#fafafa'; });
+            compact.addEventListener('drop', event => {
+                event.preventDefault();
+                const key = event.dataTransfer.getData('text/plain') || draggedWorkerKey;
+                if (!key) return;
+                assignWorker(key, 'unassigned');
+                renderPanel();
+            });
+            unassigned.appendChild(compact);
+        } else {
+            const unassignedZone = createDropZone('unassigned', 'UNASSIGNED', byArea.unassigned);
+            const zoneHeader = unassignedZone.firstElementChild;
+            if (zoneHeader) {
+                const hideButton = document.createElement('button');
+                hideButton.textContent = 'Hide';
+                hideButton.style.cssText = `font-family:${TOOL_FONT};margin-left:auto;margin-right:7px;background:white;border:1px solid #aaa;color:#444;border-radius:6px;padding:4px 9px;font-size:10px;font-weight:800;cursor:pointer;`;
+                hideButton.onclick = event => { event.stopPropagation(); unassignedCollapsedByDate[selectedDate] = true; renderPanel(); };
+                zoneHeader.insertBefore(hideButton, zoneHeader.lastElementChild);
+            }
+            unassigned.appendChild(unassignedZone);
+        }
         panel.appendChild(unassigned);
 
         const leadership = document.createElement('div');
@@ -1074,12 +1385,18 @@ render();
         panel.appendChild(leadership);
 
         const grid = document.createElement('div');
-        grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,minmax(300px,1fr));gap:14px;align-items:start;';
+        grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,minmax(300px,1fr));gap:14px;align-items:start;--tp-flow-sticky-top:8px;';
+
+        const updateFlowStickyTop = () => {
+            const top = Math.ceil(unassigned.getBoundingClientRect().height) + 16;
+            grid.style.setProperty('--tp-flow-sticky-top', `${top}px`);
+        };
+
         BOARD_AREAS.forEach(group => {
             const column = document.createElement('div');
-            column.style.cssText = 'border:1px solid #d5d5d5;border-radius:9px;background:#fff;overflow:hidden;';
+            column.style.cssText = 'border:1px solid #d5d5d5;border-radius:9px;background:#fff;overflow:visible;';
             const count = group.areas.reduce((total, area) => total + byArea[area.id].length, 0);
-            column.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 13px;background:${TP_BLUE};color:white;font-size:15px;font-weight:800;"><span>${escapeHTML(group.group)}</span><span style="display:inline-flex;align-items:center;justify-content:center;min-width:27px;height:27px;padding:0 7px;border-radius:999px;background:white;color:${TP_BLUE};font-size:12px;">${count}</span></div>`;
+            column.innerHTML = `<div style="position:sticky;top:var(--tp-flow-sticky-top,8px);z-index:45;display:flex;justify-content:space-between;align-items:center;padding:12px 13px;background:rgba(0,88,163,.93);color:white;font-size:15px;font-weight:800;border-radius:8px 8px 0 0;box-shadow:0 6px 12px -12px rgba(0,0,0,.8);"><span>${escapeHTML(group.group)}</span><span style="display:inline-flex;align-items:center;justify-content:center;min-width:27px;height:27px;padding:0 7px;border-radius:999px;background:white;color:${TP_BLUE};font-size:12px;">${count}</span></div>`;
             const areaContainer = document.createElement('div');
             areaContainer.style.cssText = 'display:flex;flex-direction:column;gap:10px;padding:10px;';
             group.areas.forEach(area => areaContainer.appendChild(createDropZone(area.id, area.name, byArea[area.id])));
@@ -1087,6 +1404,8 @@ render();
             grid.appendChild(column);
         });
         panel.appendChild(grid);
+        updateFlowStickyTop();
+        requestAnimationFrame(updateFlowStickyTop);
         if (window.innerWidth < 1050) grid.style.gridTemplateColumns = '1fr';
     }
 
@@ -1123,7 +1442,7 @@ render();
     // ---------- Main Board PDF ----------
 
     function renderPDFWorker(worker) {
-        return `<div class="worker"><span class="worker-bar" style="background:${getFunctionBarBackground(worker)};"></span><div class="worker-name">${escapeHTML(worker.name)} ${renderCapabilityBadges(worker, true)}</div><div class="worker-time"><strong>${formatTime(worker.start)}</strong><span> &rarr; ${formatTime(worker.end)}</span></div></div>`;
+        return `<div class="worker"><span class="worker-bar" style="background:${getFunctionBarBackground(worker)};"></span><div class="worker-name">${escapeHTML(worker.name)} ${renderCapabilityBadges(worker, true)}</div><div class="worker-time"><strong>${formatTime(worker.start)}</strong><span> &rarr; ${formatTime(worker.end)}</span></div>${renderAbsenceIndicator(worker, true)}</div>`;
     }
 
     function renderPDFArea(name, workers) {
@@ -1195,7 +1514,7 @@ render();
                 getJSON(findLoadSettingUrl() || buildLoadSettingUrl())
             ]);
             const employees = normalizeWorktimesResponse(worktimesJSON);
-            const absences = buildAllDayAbsences(normalizeAbsenceResponse(absenceJSON));
+            const absences = buildUnavailableAbsences(normalizeAbsenceResponse(absenceJSON));
             const functionMap = buildFunctionMap(settingsJSON);
             currentDays = buildDays(employees, absences, functionMap);
             const dates = Object.keys(currentDays).sort();
