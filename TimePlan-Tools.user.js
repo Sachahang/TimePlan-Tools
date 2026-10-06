@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         TimePlan Tools
+// @name         TimePlan Tools By Sacha Hang
 // @namespace    timeplan-local-tools
 // @version      1.16.33
 // @description  Dynamic operational board with simplified break lifecycle, positional Basic Plan and handover reminder
