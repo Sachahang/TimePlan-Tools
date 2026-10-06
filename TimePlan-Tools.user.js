@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TimePlan Tools
 // @namespace    timeplan-local-tools
-// @version      1.16.31
+// @version      1.16.33
 // @description  Dynamic operational board with simplified break lifecycle, positional Basic Plan and handover reminder
 // @match        https://ikea.timeplan-software.net/*
 // @updateURL    https://raw.githubusercontent.com/Sachahang/TimePlan-Tools/main/TimePlan-Tools.user.js
@@ -479,6 +479,17 @@
                 color: normalizeHexColor(special?.color || segment.color || '#666666')
             });
         });
+
+        // Oplæring is useful operational information even though it is not an
+        // absence. Show it as a temporary capability-style badge for this day.
+        if (worker.training) {
+            map.set('status:training', {
+                label: 'TRAINING',
+                title: 'Oplæring / Training',
+                color: '#7A5AF8'
+            });
+        }
+
         return Array.from(map.values());
     }
 
@@ -578,22 +589,31 @@
     // ---------- Absence / effective presence ----------
 
     function getAbsenceActivityText(absence) {
-        // DepartmentAbsence can expose the activity label under different field
-        // names depending on the TimePlan response/version. Keep this deliberately
-        // limited to descriptive fields so employee names/IDs cannot affect it.
-        const descriptiveKeys = [
-            'name', 'description', 'text', 'label', 'title', 'reason',
-            'absence_name', 'absencename', 'absenceName',
-            'type_name', 'typename', 'typeName',
-            'activity_name', 'activityname', 'activityName'
-        ];
+        // TimePlan does not always expose the activity name (for example
+        // "Oplæring") as a top-level DepartmentAbsence field. In some responses
+        // it is nested inside an activity/type object. Collect string values
+        // recursively so training can be recognised regardless of that shape.
+        const strings = [];
+        const seen = new Set();
 
-        return descriptiveKeys
-            .map(key => absence?.[key])
-            .filter(value => typeof value === 'string')
-            .join(' ')
-            .trim()
-            .toLowerCase();
+        function collect(value, depth = 0) {
+            if (value == null || depth > 6) return;
+            if (typeof value === 'string') {
+                const text = value.trim();
+                if (text) strings.push(text);
+                return;
+            }
+            if (typeof value !== 'object' || seen.has(value)) return;
+            seen.add(value);
+            if (Array.isArray(value)) {
+                value.forEach(item => collect(item, depth + 1));
+                return;
+            }
+            Object.values(value).forEach(item => collect(item, depth + 1));
+        }
+
+        collect(absence);
+        return strings.join(' ').toLowerCase();
     }
 
     function isTrainingActivity(absence) {
@@ -695,7 +715,7 @@
             .sort((a, b) => a.start.localeCompare(b.start));
     }
 
-    function buildDays(employees, absences, functionMap) {
+    function buildDays(employees, absences, functionMap, trainingActivities = []) {
         const days = {};
         employees.forEach(employee => {
             mergeContiguousWorktimes(employee.worktimes || []).forEach(worktime => {
@@ -706,6 +726,12 @@
                     worktime,
                     employee.employee_id,
                     absences
+                );
+
+                const isTraining = trainingActivities.some(activity =>
+                    String(activity.employeeid) === String(employee.employee_id) &&
+                    activity.from < worktime.end_time &&
+                    activity.to > worktime.start_time
                 );
 
                 // Keep one row/magnet per logical TimePlan shift. Absences only annotate
@@ -726,6 +752,7 @@
                     start: worktime.start_time,
                     end: worktime.end_time,
                     effectiveStart: effectiveBlocks[0].start_time,
+                    training: isTraining,
                     functionSegments: getFunctionSegments(worktime, functionMap),
                     absenceSegments: relevantAbsences.map(absence => ({
                         start: absence.start,
@@ -1774,9 +1801,11 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
                 getJSON(findLoadSettingUrl() || buildLoadSettingUrl())
             ]);
             const employees = normalizeWorktimesResponse(worktimesJSON);
-            const absences = buildUnavailableAbsences(normalizeAbsenceResponse(absenceJSON));
+            const rawAbsences = normalizeAbsenceResponse(absenceJSON);
+            const trainingActivities = rawAbsences.filter(isTrainingActivity);
+            const absences = buildUnavailableAbsences(rawAbsences);
             const functionMap = buildFunctionMap(settingsJSON);
-            currentDays = buildDays(employees, absences, functionMap);
+            currentDays = buildDays(employees, absences, functionMap, trainingActivities);
             const dates = Object.keys(currentDays).sort();
             if (!dates.length) { alert('No scheduled coworkers found.'); return; }
             if (!selectedDate || !currentDays[selectedDate]) selectedDate = dates[0];
