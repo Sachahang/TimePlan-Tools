@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TimePlan Tools
 // @namespace    timeplan-local-tools
-// @version      1.16.30
+// @version      1.16.31
 // @description  Dynamic operational board with simplified break lifecycle, positional Basic Plan and handover reminder
 // @match        https://ikea.timeplan-software.net/*
 // @updateURL    https://raw.githubusercontent.com/Sachahang/TimePlan-Tools/main/TimePlan-Tools.user.js
@@ -577,11 +577,41 @@
 
     // ---------- Absence / effective presence ----------
 
+    function getAbsenceActivityText(absence) {
+        // DepartmentAbsence can expose the activity label under different field
+        // names depending on the TimePlan response/version. Keep this deliberately
+        // limited to descriptive fields so employee names/IDs cannot affect it.
+        const descriptiveKeys = [
+            'name', 'description', 'text', 'label', 'title', 'reason',
+            'absence_name', 'absencename', 'absenceName',
+            'type_name', 'typename', 'typeName',
+            'activity_name', 'activityname', 'activityName'
+        ];
+
+        return descriptiveKeys
+            .map(key => absence?.[key])
+            .filter(value => typeof value === 'string')
+            .join(' ')
+            .trim()
+            .toLowerCase();
+    }
+
+    function isTrainingActivity(absence) {
+        const text = getAbsenceActivityText(absence);
+        if (!text) return false;
+
+        // Oplæring is training, not operational absence. TimePlan may still send
+        // physicallyPresent=false/all-day for it, but the coworker's Working time
+        // must remain visible in Sorted View and Board Planning.
+        return /(?:^|\b)(oplæring|oplaering|training)(?:\b|$)/i.test(text);
+    }
+
     function buildUnavailableAbsences(absences) {
         return absences.filter(absence =>
             absence.physicallyPresent === false &&
             absence.employeeid !== undefined &&
-            absence.from && absence.to
+            absence.from && absence.to &&
+            !isTrainingActivity(absence)
         );
     }
 
