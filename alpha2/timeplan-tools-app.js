@@ -1764,11 +1764,6 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
             stamp.textContent = 'Snapshot · ' + new Intl.DateTimeFormat('en-GB', {dateStyle:'medium',timeStyle:'short'}).format(snapshotCapturedAt);
             top.firstElementChild.appendChild(stamp);
         }
-        const close = document.createElement('button');
-        close.textContent = 'Close';
-        close.style.cssText = `font-family:${TOOL_FONT};border:none;background:#eee;border-radius:5px;padding:8px 12px;cursor:pointer;`;
-        close.onclick = () => { panel.remove(); updateButtonState(); };
-        top.appendChild(close);
         panel.appendChild(top);
         renderDayButtons(panel);
         renderViewTabs(panel);
