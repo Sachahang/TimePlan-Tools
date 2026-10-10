@@ -1,0 +1,1885 @@
+(function () {
+    'use strict';
+
+    const PANEL_ID = 'tp-tools-panel';
+    const BUTTON_ID = 'tp-tools-button';
+    const TP_BLUE = '#0058A3';
+    const TP_LIGHT_BLUE = '#EAF3FA';
+    const TOOL_FONT = 'Arial, Helvetica, sans-serif';
+
+    // Capture the font from a REAL TimePlan element, not from our own panel.
+    // The previous method could resolve to Arial because body / TimePlan Tools
+    // itself may have an inline fallback. This deliberately ignores our UI.
+    function getNativeTimePlanFontFamily() {
+        const selectors = [
+            'table td',
+            'table th',
+            '[role="gridcell"]',
+            '[role="columnheader"]',
+            'button',
+            'label',
+            'span',
+            'div'
+        ];
+
+        const genericOnly = family => {
+            const f = String(family || '').toLowerCase().replace(/\s+/g, '');
+            return (
+                f === 'arial' ||
+                f === '"arial"' ||
+                f === 'arial,helvetica,sans-serif' ||
+                f === 'helvetica,arial,sans-serif' ||
+                f === 'sans-serif'
+            );
+        };
+
+        for (const selector of selectors) {
+            const elements = Array.from(document.querySelectorAll(selector));
+
+            for (const element of elements) {
+                if (
+                    element.closest?.(`#${PANEL_ID}`) ||
+                    element.closest?.(`#${BUTTON_ID}`)
+                ) {
+                    continue;
+                }
+
+                const text = String(element.textContent || '').trim();
+                if (!text) continue;
+
+                const rect = element.getBoundingClientRect();
+                if (rect.width < 5 || rect.height < 5) continue;
+
+                try {
+                    const family = getComputedStyle(element).fontFamily;
+                    if (family && family.trim() && !genericOnly(family)) {
+                        return family.trim();
+                    }
+                } catch {}
+            }
+        }
+
+        // Last fallback: native body computed style.
+        try {
+            const family = getComputedStyle(document.body).fontFamily;
+            if (family && family.trim()) return family.trim();
+        } catch {}
+
+        return TOOL_FONT;
+    }
+
+    function collectTimePlanFontFaceCSS() {
+        const collected = [];
+
+        function scan(rules) {
+            if (!rules) return;
+
+            for (const rule of rules) {
+                try {
+                    if (
+                        rule.type === CSSRule.FONT_FACE_RULE ||
+                        rule.constructor?.name === 'CSSFontFaceRule'
+                    ) {
+                        collected.push(rule.cssText);
+                    } else if (rule.cssRules) {
+                        scan(rule.cssRules);
+                    }
+                } catch {}
+            }
+        }
+
+        for (const sheet of Array.from(document.styleSheets || [])) {
+            try {
+                scan(sheet.cssRules);
+            } catch {}
+        }
+
+        return collected.join('\n');
+    }
+
+    function getPrimaryFontName(fontFamily) {
+        return String(fontFamily || TOOL_FONT).split(',')[0].trim().replace(/^['"]|['"]$/g, '') || 'Arial';
+    }
+
+    function blobToDataURL(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = () => reject(reader.error || new Error('Could not read font blob.'));
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    async function inlineFontURLs(cssText, baseURL) {
+        const regex = /url\((['"]?)([^'")]+)\1\)/g;
+        const matches = Array.from(String(cssText || '').matchAll(regex));
+        let output = String(cssText || '');
+
+        for (const match of matches) {
+            const original = match[0];
+            const rawURL = match[2];
+            if (!rawURL || rawURL.startsWith('data:')) continue;
+            try {
+                const absolute = new URL(rawURL, baseURL || location.href).href;
+                const response = await fetch(absolute, { credentials: 'include' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const dataURL = await blobToDataURL(await response.blob());
+                output = output.split(original).join(`url("${dataURL}")`);
+            } catch {
+                try {
+                    const absolute = new URL(rawURL, baseURL || location.href).href;
+                    output = output.split(original).join(`url("${absolute}")`);
+                } catch {}
+            }
+        }
+        return output;
+    }
+
+    async function collectPortableTimePlanFontFaceCSS(fontFamily) {
+        const primary = getPrimaryFontName(fontFamily).toLowerCase();
+        const collected = [];
+
+        async function scan(rules, baseURL) {
+            if (!rules) return;
+            for (const rule of rules) {
+                try {
+                    if (
+                        rule.type === CSSRule.FONT_FACE_RULE ||
+                        rule.constructor?.name === 'CSSFontFaceRule'
+                    ) {
+                        const text = String(rule.cssText || '');
+                        const familyMatch = text.match(/font-family\s*:\s*([^;}]*)/i);
+                        const family = String(familyMatch?.[1] || '').trim().replace(/^['"]|['"]$/g, '').toLowerCase();
+                        if (family === primary) collected.push(await inlineFontURLs(text, baseURL));
+                    } else if (rule.cssRules) {
+                        await scan(rule.cssRules, baseURL);
+                    }
+                } catch {}
+            }
+        }
+
+        for (const sheet of Array.from(document.styleSheets || [])) {
+            try { await scan(sheet.cssRules, sheet.href || location.href); } catch {}
+        }
+
+        return collected.join('\n');
+    }
+
+    // Keep the same stylesheet files available to the standalone board.
+    // This is important when the detected font is loaded by TimePlan CSS.
+    function getTimePlanStylesheetLinksHTML() {
+        return Array.from(
+            document.querySelectorAll('link[rel="stylesheet"][href]')
+        )
+            .map(link => {
+                try {
+                    const href = new URL(link.href, location.href).href;
+                    return `<link rel="stylesheet" href="${escapeHTML(href)}">`;
+                } catch {
+                    return '';
+                }
+            })
+            .filter(Boolean)
+            .join('\n');
+    }
+
+    function escapeStyleClose(value) {
+        return String(value || '').replace(/<\/style/gi, '<\\/style');
+    }
+
+    const BOARD_DEPARTMENT_ID = '159';
+    const BOARD_DEPARTMENT_CODE = '094-4050';
+
+    let currentDays = {};
+    let selectedDate = null;
+    let activeView = 'sorted';
+    let draggedWorkerKey = null;
+    const boardAssignments = {};
+    const unassignedCollapsedByDate = {};
+    const notPresentByDate = {};
+    const externalWorkersByDate = {};
+
+
+    const BOARD_AREAS = [
+        { group: 'Click & Collect', id: 'cc', areas: [
+            { id: 'cc-floor', name: 'Floor' },
+            { id: 'cc-mh', name: 'MH' },
+            { id: 'cc-reachtruck', name: 'Reachtruck' },
+            { id: 'cc-tpl', name: 'TPL' },
+            { id: 'cc-extra', name: 'Extra' }
+        ]},
+        { group: 'LCD', id: 'lcd', areas: [
+            { id: 'lcd-floor', name: 'Floor' },
+            { id: 'lcd-mh', name: 'MH' },
+            { id: 'lcd-reachtruck', name: 'Reachtruck' },
+            { id: 'lcd-loading-checking', name: 'Loading & Checking' },
+            { id: 'lcd-tpl', name: 'TPL' },
+            { id: 'lcd-extra', name: 'Extra' }
+        ]},
+        { group: 'FullServe', id: 'fullserve', areas: [
+            { id: 'fs-vulpicks', name: 'VULPICKS' },
+            { id: 'fs-tpl', name: 'TPL' },
+            { id: 'fs-external-returns', name: 'External Returns' },
+            { id: 'fs-extra', name: 'Extra' }
+        ]}
+    ];
+
+    // ---------- Page / API discovery ----------
+
+    function isDepartmentPlanPage() {
+        return location.hash.startsWith('#/roster/departmentplan');
+    }
+
+    function findLatestResource(fragment) {
+        const matches = performance.getEntriesByType('resource').filter(e => e.name.includes(fragment));
+        return matches.length ? matches[matches.length - 1].name : null;
+    }
+
+    function findDepartmentWorktimesUrl() { return findLatestResource('func=DepartmentWorktimes'); }
+    function findDepartmentAbsenceUrl() { return findLatestResource('func=DepartmentAbsence'); }
+    function findLoadSettingUrl() { return findLatestResource('func=LoadSetting'); }
+
+    function getCurrentDepartmentId() {
+        const worktimesUrl = findDepartmentWorktimesUrl();
+        if (!worktimesUrl) return null;
+        try { return new URL(worktimesUrl).searchParams.get('dept_id'); }
+        catch { return null; }
+    }
+
+    function isBoardDepartment() {
+        return true;
+    }
+
+    function buildAbsenceUrl(worktimesUrl) {
+        const url = new URL(worktimesUrl);
+        const deptId = url.searchParams.get('dept_id');
+        const fromDate = url.searchParams.get('from_date');
+        const days = Number(url.searchParams.get('days') || 6);
+        if (!deptId || !fromDate) throw new Error('Could not determine department/date information.');
+
+        const [y, m, d] = fromDate.substring(0, 10).split('-').map(Number);
+        const end = new Date(y, m - 1, d);
+        end.setDate(end.getDate() + days);
+        const endDate = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}T23:59:59.999`;
+
+        const absenceUrl = new URL('/webapi/', location.origin);
+        absenceUrl.searchParams.set('func', 'DepartmentAbsence');
+        absenceUrl.searchParams.set('deptid', deptId);
+        absenceUrl.searchParams.set('fromdate', fromDate);
+        absenceUrl.searchParams.set('todate', endDate);
+        return absenceUrl.toString();
+    }
+
+    function buildLoadSettingUrl() {
+        const url = new URL('/webapi/', location.origin);
+        url.searchParams.set('func', 'LoadSetting');
+        return url.toString();
+    }
+
+    async function getJSON(url) {
+        const response = await fetch(url, { credentials: 'include' });
+        if (!response.ok) throw new Error(`TimePlan returned HTTP ${response.status}`);
+        return response.json();
+    }
+
+    // ---------- Date / time ----------
+
+    function getDateKey(value) { return value ? value.substring(0, 10) : ''; }
+    function formatTime(value) { return value ? value.substring(11, 16) : ''; }
+
+    function timeToMinutes(value) {
+        if (!value) return 0;
+        return Number(value.substring(11, 13)) * 60 + Number(value.substring(14, 16));
+    }
+
+    function minutesBetween(start, end) {
+        return Math.max(0, timeToMinutes(end) - timeToMinutes(start));
+    }
+
+    function getWorkerEffectiveStart(worker) {
+        return worker.effectiveStart || worker.start;
+    }
+
+    function sortWorkersByStart(workers) {
+        return [...workers].sort((a, b) =>
+            (timeToMinutes(getWorkerEffectiveStart(a)) - timeToMinutes(getWorkerEffectiveStart(b))) ||
+            (timeToMinutes(a.start) - timeToMinutes(b.start)) ||
+            (timeToMinutes(a.end) - timeToMinutes(b.end)) ||
+            a.name.localeCompare(b.name)
+        );
+    }
+
+    function sortWorkersByOfficialStart(workers) {
+        return [...workers].sort((a, b) =>
+            (timeToMinutes(a.start) - timeToMinutes(b.start)) ||
+            (timeToMinutes(a.end) - timeToMinutes(b.end)) ||
+            a.name.localeCompare(b.name)
+        );
+    }
+
+
+    function isWorkerNotPresent(worker) {
+        return Boolean((notPresentByDate[selectedDate] || {})[getWorkerKey(worker)]);
+    }
+
+    function getUnassignedRoleGroup(worker) {
+        if (worker.isExternal) return { id: 'external-help', label: 'EXTERNAL HELP', priority: 4 };
+        const labels = new Set(getCapabilityLabels(worker));
+        if (labels.has('COORD')) return { id: 'coordinators', label: 'COORDINATORS', priority: 0 };
+        if (labels.has('OA')) return { id: 'order-auditors', label: 'ORDER AUDITORS', priority: 1 };
+        if (labels.has('FLT')) return { id: 'forklift-drivers', label: 'FORKLIFT DRIVERS', priority: 2 };
+        return { id: 'order-pickers', label: 'ORDER PICKERS', priority: 3 };
+    }
+
+    function groupUnassignedWorkers(workers) {
+        const definitions = [
+            { id: 'coordinators', label: 'COORDINATORS', priority: 0 },
+            { id: 'order-auditors', label: 'ORDER AUDITORS', priority: 1 },
+            { id: 'forklift-drivers', label: 'FORKLIFT DRIVERS', priority: 2 },
+            { id: 'order-pickers', label: 'ORDER PICKERS', priority: 3 },
+            { id: 'external-help', label: 'EXTERNAL HELP', priority: 4 }
+        ];
+        const groups = new Map(definitions.map(group => [group.id, { ...group, workers: [] }]));
+        workers.forEach(worker => groups.get(getUnassignedRoleGroup(worker).id).workers.push(worker));
+        return definitions
+            .map(group => groups.get(group.id))
+            .filter(group => group.workers.length)
+            .map(group => ({ ...group, workers: sortWorkersByStart(group.workers) }));
+    }
+
+    function localDateObject(dateString) {
+        const [y, m, d] = dateString.split('-').map(Number);
+        return new Date(y, m - 1, d);
+    }
+
+    function formatDate(value) {
+        return localDateObject(getDateKey(value)).toLocaleDateString('en-GB', {
+            weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+        });
+    }
+
+    function formatShortDate(dateString) {
+        return localDateObject(dateString).toLocaleDateString('en-GB', {
+            weekday: 'short', day: 'numeric', month: 'short'
+        });
+    }
+
+    function formatGeneratedTime() {
+        return new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // ---------- Response normalization ----------
+
+    function normalizeWorktimesResponse(json) {
+        if (Array.isArray(json)) return json;
+        for (const key of ['data', 'result', 'results']) {
+            if (Array.isArray(json?.[key])) return json[key];
+        }
+        for (const value of Object.values(json || {})) {
+            if (Array.isArray(value) && value.some(item => item?.employee_name)) return value;
+        }
+        throw new Error('Could not recognize DepartmentWorktimes response.');
+    }
+
+    function normalizeAbsenceResponse(json) {
+        if (Array.isArray(json)) return json;
+        for (const key of ['data', 'result', 'results']) {
+            if (Array.isArray(json?.[key])) return json[key];
+        }
+        const found = [];
+        function search(value) {
+            if (!value) return;
+            if (Array.isArray(value)) return value.forEach(search);
+            if (typeof value === 'object') {
+                if (value.employeeid !== undefined && value.from && value.to && value.allday !== undefined) {
+                    found.push(value);
+                    return;
+                }
+                Object.values(value).forEach(search);
+            }
+        }
+        search(json);
+        return found;
+    }
+
+    // ---------- Colors / functions / badges ----------
+
+    function timePlanColorToHex(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return '#666666';
+        const blue = (number >> 16) & 255;
+        const green = (number >> 8) & 255;
+        const red = number & 255;
+        return ('#' + red.toString(16).padStart(2, '0') + green.toString(16).padStart(2, '0') + blue.toString(16).padStart(2, '0')).toUpperCase();
+    }
+
+    function normalizeHexColor(hex) {
+        let clean = String(hex || '').replace('#', '').trim();
+        if (clean.length === 3) clean = clean.split('').map(c => c + c).join('');
+        return /^[0-9a-fA-F]{6}$/.test(clean) ? `#${clean.toUpperCase()}` : '#666666';
+    }
+
+    function getContrastTextColor(color) {
+        const hex = normalizeHexColor(color).substring(1);
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
+        return ((r * 299 + g * 587 + b * 114) / 1000) > 155 ? '#222222' : '#FFFFFF';
+    }
+
+    function buildFunctionMap(json) {
+        const map = {};
+        const functions = json?.LoadSetting?.[0]?.jobFunctions || [];
+        functions.forEach(fn => {
+            if (fn?.id === undefined || fn?.name === undefined) return;
+            map[String(fn.id)] = { name: fn.name || '', color: timePlanColorToHex(fn.color) };
+        });
+        return map;
+    }
+
+    function getSpecialFunctionBadge(name) {
+        const text = String(name || '').trim().toLowerCase();
+        if (text.includes('forklift')) return { label: 'FLT', color: '#E0A800' };
+        if (text.includes('order auditor') || text.includes('order audit')) return { label: 'OA', color: '#222222' };
+        if (text.includes('coordinator')) return { label: 'COORD', color: TP_BLUE };
+        if (text.includes('order picking delivery')) return { label: 'OPD', color: null };
+        if (text.includes('order picking other')) return { label: 'OPO', color: null };
+        return null;
+    }
+
+    function abbreviateFunctionName(name) {
+        const words = String(name || '').replace(/[^A-Za-z0-9\u00C6\u00D8\u00C5\u00E6\u00F8\u00E5]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+        if (!words.length) return 'FUNC';
+        if (words.length === 1) return words[0].substring(0, 4).toUpperCase();
+        return words.map(w => w.charAt(0)).join('').substring(0, 5).toUpperCase();
+    }
+
+    function getFunctionBadges(worker) {
+        const map = new Map();
+        (worker.functionSegments || []).forEach(segment => {
+            const name = String(segment.name || '').trim();
+            if (!name) return;
+            const key = segment.id !== undefined ? `id:${segment.id}` : `name:${name.toLowerCase()}`;
+            if (map.has(key)) return;
+            const special = getSpecialFunctionBadge(name);
+            map.set(key, {
+                label: special?.label || abbreviateFunctionName(name),
+                title: name,
+                color: normalizeHexColor(special?.color || segment.color || '#666666')
+            });
+        });
+
+        // Oplæring is useful operational information even though it is not an
+        // absence. Show it as a temporary capability-style badge for this day.
+        if (worker.training) {
+            map.set('status:training', {
+                label: 'TRAINING',
+                title: 'Oplæring / Training',
+                color: '#7A5AF8'
+            });
+        }
+
+        return Array.from(map.values());
+    }
+
+    function getCapabilityLabels(worker) { return getFunctionBadges(worker).map(b => b.label); }
+    function getFunctionNames(worker) {
+        return Array.from(new Set((worker.functionSegments || []).map(s => String(s.name || '').trim()).filter(Boolean)));
+    }
+
+    function getFunctionBadgeStyle(badge, compact = false) {
+        const background = normalizeHexColor(badge.color);
+        return `display:inline-flex;align-items:center;justify-content:center;height:${compact ? '16px' : '19px'};padding:0 ${compact ? '4px' : '6px'};border:1px solid ${background};border-radius:999px;background:${background};color:${getContrastTextColor(background)};font-size:${compact ? '7px' : '9px'};line-height:1;font-weight:800;white-space:nowrap;letter-spacing:.2px;`;
+    }
+
+    function renderCapabilityBadges(worker, compact = false) {
+        const badges = getFunctionBadges(worker);
+        if (!badges.length) return '';
+        return `<span style="display:inline-flex;flex-wrap:wrap;gap:${compact ? '2px' : '3px'};align-items:center;">${badges.map(badge => `<span title="${escapeHTML(badge.title)}" style="${getFunctionBadgeStyle(badge, compact)}">${escapeHTML(badge.label)}</span>`).join('')}</span>`;
+    }
+
+    // New in v1.10: function-color vertical bar.
+    // Multiple function segments are represented proportionally from top to bottom.
+    function getFunctionBarBackground(worker) {
+        const segments = (worker.functionSegments || []).filter(s => s?.start && s?.end);
+        if (!segments.length) return '#9A9A9A';
+        if (segments.length === 1) return normalizeHexColor(segments[0].color || '#666666');
+
+        const durations = segments.map(s => minutesBetween(s.start, s.end));
+        const total = durations.reduce((sum, value) => sum + value, 0);
+        if (!total) return normalizeHexColor(segments[0].color || '#666666');
+
+        let cursor = 0;
+        const stops = [];
+        segments.forEach((segment, index) => {
+            const startPct = cursor / total * 100;
+            cursor += durations[index];
+            const endPct = cursor / total * 100;
+            const color = normalizeHexColor(segment.color || '#666666');
+            stops.push(`${color} ${startPct.toFixed(2)}%`, `${color} ${endPct.toFixed(2)}%`);
+        });
+        return `linear-gradient(to bottom, ${stops.join(', ')})`;
+    }
+
+    // ---------- Worktime merge ----------
+
+    function mergeContiguousWorktimes(worktimes) {
+        const sorted = [...(Array.isArray(worktimes) ? worktimes : [])]
+            .filter(w => w?.start_time && w?.end_time)
+            .sort((a, b) => a.start_time.localeCompare(b.start_time));
+        const merged = [];
+
+        sorted.forEach(worktime => {
+            const copy = { ...worktime, details: [...(worktime.details || [])] };
+            const last = merged[merged.length - 1];
+            if (!last) return merged.push(copy);
+
+            const sameDate = getDateKey(last.start_time) === getDateKey(copy.start_time);
+            const contiguous = last.end_time === copy.start_time;
+            if (sameDate && contiguous) {
+                last.end_time = copy.end_time;
+                last.details.push(...(copy.details || []));
+            } else {
+                merged.push(copy);
+            }
+        });
+        return merged;
+    }
+
+    function mergeFunctionSegments(segments) {
+        const sorted = [...segments].sort((a, b) => a.start.localeCompare(b.start));
+        const merged = [];
+        sorted.forEach(segment => {
+            const last = merged[merged.length - 1];
+            if (last && String(last.id) === String(segment.id) && last.end === segment.start) {
+                last.end = segment.end;
+            } else {
+                merged.push({ ...segment });
+            }
+        });
+        return merged;
+    }
+
+    function getFunctionSegments(worktime, functionMap) {
+        return mergeFunctionSegments((worktime.details || [])
+            .filter(detail => detail?.function_id !== undefined)
+            .map(detail => {
+                const mapped = functionMap[String(detail.function_id)];
+                return {
+                    id: detail.function_id,
+                    name: mapped?.name || `Function ${detail.function_id}`,
+                    color: mapped?.color || '#666666',
+                    start: detail.start_time,
+                    end: detail.end_time
+                };
+            }));
+    }
+
+    // ---------- Absence / effective presence ----------
+
+    function getAbsenceActivityText(absence) {
+        // TimePlan does not always expose the activity name (for example
+        // "Oplæring") as a top-level DepartmentAbsence field. In some responses
+        // it is nested inside an activity/type object. Collect string values
+        // recursively so training can be recognised regardless of that shape.
+        const strings = [];
+        const seen = new Set();
+
+        function collect(value, depth = 0) {
+            if (value == null || depth > 6) return;
+            if (typeof value === 'string') {
+                const text = value.trim();
+                if (text) strings.push(text);
+                return;
+            }
+            if (typeof value !== 'object' || seen.has(value)) return;
+            seen.add(value);
+            if (Array.isArray(value)) {
+                value.forEach(item => collect(item, depth + 1));
+                return;
+            }
+            Object.values(value).forEach(item => collect(item, depth + 1));
+        }
+
+        collect(absence);
+        return strings.join(' ').toLowerCase();
+    }
+
+    function isTrainingActivity(absence) {
+        const text = getAbsenceActivityText(absence);
+        if (!text) return false;
+
+        // Oplæring is training, not operational absence. TimePlan may still send
+        // physicallyPresent=false/all-day for it, but the coworker's Working time
+        // must remain visible in Sorted View and Board Planning.
+        return /(?:^|\b)(oplæring|oplaering|training)(?:\b|$)/i.test(text);
+    }
+
+    function buildUnavailableAbsences(absences) {
+        return absences.filter(absence =>
+            absence.physicallyPresent === false &&
+            absence.employeeid !== undefined &&
+            absence.from && absence.to &&
+            !isTrainingActivity(absence)
+        );
+    }
+
+    function maxTimestamp(a, b) { return a > b ? a : b; }
+    function minTimestamp(a, b) { return a < b ? a : b; }
+
+    function clipWorktimeDetails(details, start, end) {
+        return (details || []).
+            filter(detail => detail?.start_time && detail?.end_time).
+            map(detail => {
+                const clippedStart = maxTimestamp(detail.start_time, start);
+                const clippedEnd = minTimestamp(detail.end_time, end);
+                if (clippedStart >= clippedEnd) return null;
+                return { ...detail, start_time: clippedStart, end_time: clippedEnd };
+            }).
+            filter(Boolean);
+    }
+
+    function subtractAbsencesFromWorktime(worktime, employeeId, absences) {
+        let blocks = [{
+            ...worktime,
+            details: [...(worktime.details || [])]
+        }];
+
+        const relevantAbsences = absences
+            .filter(absence =>
+                String(absence.employeeid) === String(employeeId) &&
+                absence.from < worktime.end_time &&
+                absence.to > worktime.start_time
+            )
+            .sort((a, b) => a.from.localeCompare(b.from));
+
+        relevantAbsences.forEach(absence => {
+            const nextBlocks = [];
+
+            blocks.forEach(block => {
+                const absenceStart = maxTimestamp(absence.from, block.start_time);
+                const absenceEnd = minTimestamp(absence.to, block.end_time);
+
+                if (absenceStart >= absenceEnd) {
+                    nextBlocks.push(block);
+                    return;
+                }
+
+                if (block.start_time < absenceStart) {
+                    nextBlocks.push({
+                        ...block,
+                        end_time: absenceStart,
+                        details: clipWorktimeDetails(block.details, block.start_time, absenceStart)
+                    });
+                }
+
+                if (absenceEnd < block.end_time) {
+                    nextBlocks.push({
+                        ...block,
+                        start_time: absenceEnd,
+                        details: clipWorktimeDetails(block.details, absenceEnd, block.end_time)
+                    });
+                }
+            });
+
+            blocks = nextBlocks;
+        });
+
+        return blocks.filter(block => block.start_time < block.end_time);
+    }
+
+    function getRelevantAbsencesForWorktime(worktime, employeeId, absences) {
+        return absences
+            .filter(absence =>
+                String(absence.employeeid) === String(employeeId) &&
+                absence.from < worktime.end_time &&
+                absence.to > worktime.start_time
+            )
+            .map(absence => ({
+                start: maxTimestamp(absence.from, worktime.start_time),
+                end: minTimestamp(absence.to, worktime.end_time),
+                allDay: absence.allday === true
+            }))
+            .filter(absence => absence.start < absence.end)
+            .sort((a, b) => a.start.localeCompare(b.start));
+    }
+
+    function buildDays(employees, absences, functionMap, trainingActivities = []) {
+        const days = {};
+        employees.forEach(employee => {
+            mergeContiguousWorktimes(employee.worktimes || []).forEach(worktime => {
+                const date = getDateKey(worktime.start_time);
+                if (!date) return;
+
+                const relevantAbsences = getRelevantAbsencesForWorktime(
+                    worktime,
+                    employee.employee_id,
+                    absences
+                );
+
+                const isTraining = trainingActivities.some(activity =>
+                    String(activity.employeeid) === String(employee.employee_id) &&
+                    activity.from < worktime.end_time &&
+                    activity.to > worktime.start_time
+                );
+
+                // Keep one row/magnet per logical TimePlan shift. Absences only annotate
+                // that original shift. A full-day absence, or any combination of
+                // absences that leaves no effective working time, removes the shift.
+                const effectiveBlocks = subtractAbsencesFromWorktime(
+                    worktime,
+                    employee.employee_id,
+                    absences
+                );
+
+                if (!effectiveBlocks.length) return;
+                if (relevantAbsences.some(absence => absence.allDay)) return;
+
+                (days[date] ||= []).push({
+                    name: employee.employee_name || 'Unknown',
+                    employeeId: employee.employee_id,
+                    start: worktime.start_time,
+                    end: worktime.end_time,
+                    effectiveStart: effectiveBlocks[0].start_time,
+                    training: isTraining,
+                    functionSegments: getFunctionSegments(worktime, functionMap),
+                    absenceSegments: relevantAbsences.map(absence => ({
+                        start: absence.start,
+                        end: absence.end
+                    }))
+                });
+            });
+        });
+        Object.keys(days).forEach(date => days[date] = sortWorkersByStart(days[date]));
+        return days;
+    }
+
+    // ---------- HTML utils ----------
+
+    function escapeHTML(value) {
+        return String(value ?? '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#039;');
+    }
+
+    function safeJSONStringify(value) {
+        return JSON.stringify(value).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e');
+    }
+
+    function getUniqueCoworkerCount(workers) {
+        return new Set(workers.map(worker => String(worker.employeeId))).size;
+    }
+
+    // ---------- Sorted View ----------
+
+    function renderFunctionBadges(worker) {
+        const segments = worker.functionSegments || [];
+        if (!segments.length) return `<span style="color:#777;font-size:12px;font-weight:600;">No function</span>`;
+        const multiple = segments.length > 1;
+        return `<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">${segments.map(segment => {
+            const color = normalizeHexColor(segment.color);
+            return `<div style="display:inline-flex;align-items:stretch;min-height:29px;background:#F7F7F7;border:1px solid #D8D8D8;border-radius:6px;overflow:hidden;white-space:nowrap;box-shadow:0 1px 1px rgba(0,0,0,.03);"><span style="width:5px;min-width:5px;background:${color};"></span><span style="display:inline-flex;align-items:center;gap:7px;padding:4px 9px 4px 8px;"><span style="color:#272727;font-size:12px;font-weight:700;">${escapeHTML(segment.name)}</span>${multiple ? `<span style="color:#777;font-size:11px;font-weight:600;">${formatTime(segment.start)}&ndash;${formatTime(segment.end)}</span>` : ''}</span></div>`;
+        }).join('')}</div>`;
+    }
+
+    function renderAbsenceIndicator(worker, compact = false) {
+        const segments = worker.absenceSegments || [];
+        if (!segments.length) return '';
+
+        const marginTop = compact ? '3px' : '4px';
+        const labelSize = compact ? '9px' : '10px';
+        const timeSize = compact ? '10px' : '11px';
+        const padding = compact ? '2px 5px' : '2px 6px';
+
+        return `<div style="display:flex;flex-wrap:wrap;gap:${compact ? '4px' : '6px'};align-items:center;margin-top:${marginTop};">${segments.map(segment => `
+            <span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">
+                <span style="display:inline-flex;align-items:center;justify-content:center;padding:${padding};border:1px solid #C85B52;border-radius:4px;background:#FFF8F7;color:#9E2F28;font-size:${labelSize};font-weight:900;letter-spacing:.25px;line-height:1.2;">ABS</span>
+                <span style="color:#8A4B47;font-size:${timeSize};font-weight:750;line-height:1.2;">${formatTime(segment.start)}&ndash;${formatTime(segment.end)}</span>
+            </span>`).join('')}</div>`;
+    }
+
+    function renderSortedAbsenceInline(worker) {
+        const segments = worker.absenceSegments || [];
+        if (!segments.length) return '';
+
+        const times = segments
+            .map(segment => `${formatTime(segment.start)}&ndash;${formatTime(segment.end)}`)
+            .join(', ');
+
+        return `<span style="display:inline-flex;flex-wrap:wrap;align-items:center;gap:5px;margin-left:8px;color:#8A4B47;font-size:12px;font-weight:700;white-space:normal;"><span style="color:#9E2F28;font-size:11px;font-weight:900;letter-spacing:.2px;">ABS</span><span>${times}</span></span>`;
+    }
+
+    function renderSortedView(panel) {
+        const workers = currentDays[selectedDate];
+        if (!workers?.length) return panel.insertAdjacentHTML('beforeend', '<p>No coworkers found for this day.</p>');
+        renderDayHeader(panel, workers);
+        const printBar = document.createElement('div');
+        printBar.style.cssText = 'display:flex;justify-content:flex-end;margin:4px 0 10px;';
+        const printButton = document.createElement('button');
+        printButton.textContent = 'Print / PDF';
+        printButton.style.cssText = `border:1px solid ${TP_BLUE};background:#fff;color:${TP_BLUE};border-radius:6px;padding:7px 11px;font-weight:800;cursor:pointer;`;
+        printButton.onclick = () => exportSortedViewToPDF(workers);
+        printBar.appendChild(printButton);
+        panel.appendChild(printBar);
+        const groups = {};
+        sortWorkersByOfficialStart(workers).forEach(worker => (groups[formatTime(worker.start)] ||= []).push(worker));
+
+        Object.entries(groups).forEach(([start, group]) => {
+            const element = document.createElement('div');
+            element.style.cssText = 'display:grid;grid-template-columns:90px 1fr;border-bottom:2px solid #c9c9c9;padding:11px 0;';
+            element.innerHTML = `
+                <div><div style="font-size:18px;font-weight:800;color:${TP_BLUE};">${start}</div><div style="font-size:12px;font-weight:700;color:#666;margin-top:3px;">${group.length} coworker${group.length === 1 ? '' : 's'}</div></div>
+                <div>${group.map(worker => `
+                    <div style="display:grid;grid-template-columns:minmax(260px,390px) minmax(280px,360px) minmax(320px,1fr);align-items:center;column-gap:20px;padding:5px 0;">
+                        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;"><span style="font-size:16px;font-weight:600;">${escapeHTML(worker.name)}</span>${renderCapabilityBadges(worker)}</div>
+                        <div style="min-width:0;display:flex;flex-wrap:wrap;align-items:center;row-gap:3px;">
+                            <span style="color:#555;white-space:nowrap;font-size:14px;font-weight:700;">${formatTime(worker.start)} &rarr; ${formatTime(worker.end)}</span>${renderSortedAbsenceInline(worker)}
+                        </div>
+                        <div>${renderFunctionBadges(worker)}</div>
+                    </div>`).join('')}</div>`;
+            panel.appendChild(element);
+        });
+    }
+
+    function exportSortedViewToPDF(workers) {
+        const groups = {};
+        sortWorkersByOfficialStart(workers).forEach(worker => (groups[formatTime(worker.start)] ||= []).push(worker));
+
+        const renderPrintCapabilityBadges = worker => {
+            const badges = getFunctionBadges(worker);
+            if (!badges.length) return '';
+            return `<span class="cap-badges">${badges.map(badge => {
+                const background = normalizeHexColor(badge.color);
+                return `<span class="cap-badge" style="background:${background};border-color:${background};color:${getContrastTextColor(background)}">${escapeHTML(badge.label)}</span>`;
+            }).join('')}</span>`;
+        };
+
+        const renderPrintFunctionBadges = worker => {
+            const segments = worker.functionSegments || [];
+            if (!segments.length) return '<span class="no-function">No function</span>';
+            const multiple = segments.length > 1;
+            return `<div class="function-list">${segments.map(segment => {
+                const color = normalizeHexColor(segment.color);
+                return `<div class="function-pill"><span class="function-color" style="background:${color}"></span><span class="function-content"><strong>${escapeHTML(segment.name)}</strong>${multiple ? `<span>${formatTime(segment.start)}&ndash;${formatTime(segment.end)}</span>` : ''}</span></div>`;
+            }).join('')}</div>`;
+        };
+
+        const renderPrintAbsence = worker => {
+            const segments = worker.absenceSegments || [];
+            if (!segments.length) return '';
+            return `<span class="absence"><strong>ABS</strong><span>${segments.map(segment => `${formatTime(segment.start)}&ndash;${formatTime(segment.end)}`).join(', ')}</span></span>`;
+        };
+
+        const rows = Object.entries(groups).map(([startTime, group]) => `
+            <section class="group">
+                <div class="group-start">
+                    <strong>${startTime}</strong>
+                    <span>${group.length} coworker${group.length === 1 ? '' : 's'}</span>
+                </div>
+                <div class="group-workers">
+                    ${group.map(worker => `
+                        <div class="worker-row">
+                            <div class="identity">
+                                <span class="worker-name">${escapeHTML(worker.name)}</span>
+                                ${renderPrintCapabilityBadges(worker)}
+                            </div>
+                            <div class="schedule">
+                                <span class="shift-time">${formatTime(worker.start)} &rarr; ${formatTime(worker.end)}</span>
+                                ${renderPrintAbsence(worker)}
+                            </div>
+                            <div class="functions">${renderPrintFunctionBadges(worker)}</div>
+                        </div>`).join('')}
+                </div>
+            </section>`).join('');
+
+        const w = window.open('', '_blank', 'width=1200,height=850');
+        if (!w) return alert('The browser blocked the print window.');
+
+        w.document.write(`<!doctype html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Sorted View - ${selectedDate}</title>
+<style>
+@page{size:A4 landscape;margin:8mm}
+*{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+body{font-family:${TOOL_FONT};margin:0;color:#222;background:#fff}
+.header{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid ${TP_BLUE};padding-bottom:7px;margin-bottom:7px}
+.title{font-size:20px;font-weight:850;color:${TP_BLUE};line-height:1.05}
+.date{font-size:12px;font-weight:700;margin-top:3px}
+.meta{text-align:right;font-size:9px;line-height:1.45;color:#666}
+.group{display:grid;grid-template-columns:64px minmax(0,1fr);border-bottom:1px solid #C8C8C8;break-inside:avoid-page}
+.group-start{padding:6px 6px 5px 1px;color:${TP_BLUE}}
+.group-start strong{display:block;font-size:16px;line-height:1;font-weight:900}
+.group-start span{display:block;margin-top:4px;font-size:8px;font-weight:750;color:#707070;white-space:nowrap}
+.group-workers{min-width:0;padding:2px 0}
+.worker-row{display:grid;grid-template-columns:minmax(175px,1.05fr) minmax(112px,.62fr) minmax(245px,1.45fr);column-gap:8px;align-items:center;min-height:34px;padding:4px 0;border-bottom:1px solid #ECECEC;break-inside:avoid}
+.worker-row:last-child{border-bottom:0}
+.identity{display:flex;flex-wrap:wrap;align-items:center;gap:4px;min-width:0}
+.worker-name{font-size:10px;font-weight:800;line-height:1.15}
+.cap-badges{display:inline-flex;flex-wrap:wrap;gap:2px;align-items:center}
+.cap-badge{display:inline-flex;align-items:center;justify-content:center;height:15px;padding:0 4px;border:1px solid;border-radius:999px;font-size:7px;font-weight:900;line-height:1;white-space:nowrap;letter-spacing:.15px}
+.schedule{display:flex;flex-wrap:wrap;align-items:center;gap:4px;min-width:0}
+.shift-time{font-size:9px;font-weight:800;color:#555;white-space:nowrap}
+.absence{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;color:#8A4B47;font-size:8px;font-weight:750}
+.absence strong{display:inline-flex;align-items:center;justify-content:center;padding:1px 4px;border:1px solid #C85B52;border-radius:4px;background:#FFF8F7;color:#9E2F28;font-size:7px;font-weight:900}
+.functions{min-width:0}
+.function-list{display:flex;flex-wrap:wrap;gap:3px;align-items:center}
+.function-pill{display:inline-flex;align-items:stretch;min-height:22px;background:#F7F7F7;border:1px solid #D8D8D8;border-radius:5px;overflow:hidden;white-space:nowrap}
+.function-color{width:4px;min-width:4px}
+.function-content{display:inline-flex;align-items:center;gap:5px;padding:3px 6px 3px 5px}
+.function-content strong{font-size:8px;font-weight:800;color:#272727}
+.function-content span{font-size:7px;font-weight:700;color:#777}
+.no-function{font-size:8px;font-weight:650;color:#777}
+
+
+@media print{body{width:100%}}
+</style>
+</head>
+<body>
+<div class="header">
+    <div>
+        <div class="title">TimePlan Sorted View</div>
+        <div class="date">${escapeHTML(formatDate(workers[0].start))}</div>
+    </div>
+    <div class="meta">${getUniqueCoworkerCount(workers)} planned coworkers<br>Department ${BOARD_DEPARTMENT_CODE}</div>
+</div>
+${rows}
+<script>window.onload=()=>setTimeout(()=>window.print(),120)<\/script>
+</body>
+</html>`);
+        w.document.close();
+    }
+
+    // ---------- Board state ----------
+
+    function getWorkerKey(worker) { return worker.key || [worker.employeeId, worker.start, worker.end].join('|'); }
+    function getAssignmentsForSelectedDate() { return (boardAssignments[selectedDate] ||= {}); }
+    function getNotPresentForSelectedDate() { return (notPresentByDate[selectedDate] ||= {}); }
+    function getExternalWorkersForSelectedDate() { return (externalWorkersByDate[selectedDate] ||= []); }
+    function getBoardWorkersForSelectedDate() { return [...(currentDays[selectedDate] || []), ...getExternalWorkersForSelectedDate()]; }
+    function getWorkerAssignment(worker) { return getAssignmentsForSelectedDate()[getWorkerKey(worker)] || 'unassigned'; }
+    function assignWorker(key, area) { getAssignmentsForSelectedDate()[key] = area; }
+
+    function setWorkerNotPresent(worker, value) {
+        const key = getWorkerKey(worker);
+        if (value) {
+            getNotPresentForSelectedDate()[key] = true;
+            assignWorker(key, 'unassigned');
+        } else {
+            delete getNotPresentForSelectedDate()[key];
+        }
+        renderPanel();
+    }
+
+    function makeExternalTimestamp(time) {
+        return `${selectedDate}T${time}:00.000Z`;
+    }
+
+    function isValidClock(value) {
+        return /^(?:[01]\\d|2[0-3]):[0-5]\\d$/.test(String(value || '').trim());
+    }
+
+    function addExternalHelp() {
+        const name = prompt('External coworker name:');
+        if (!name || !name.trim()) return;
+        const start = prompt('Shift start (HH:MM):', '08:00');
+        if (!isValidClock(start)) return alert('Please use HH:MM, for example 08:00.');
+        const end = prompt('Shift end (HH:MM):', '16:00');
+        if (!isValidClock(end)) return alert('Please use HH:MM, for example 16:00.');
+        if (timeToMinutes(makeExternalTimestamp(end)) <= timeToMinutes(makeExternalTimestamp(start))) return alert('End time must be later than start time.');
+
+        const id = `ext-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const worker = {
+            key: `external|${id}`,
+            externalId: id,
+            isExternal: true,
+            employeeId: 'EXT',
+            name: name.trim(),
+            start: makeExternalTimestamp(start),
+            end: makeExternalTimestamp(end),
+            effectiveStart: makeExternalTimestamp(start),
+            absenceSegments: [],
+            functionSegments: []
+        };
+        getExternalWorkersForSelectedDate().push(worker);
+        assignWorker(worker.key, 'unassigned');
+        unassignedCollapsedByDate[selectedDate] = false;
+        renderPanel();
+    }
+
+    function editExternalHelp(worker) {
+        if (!worker?.isExternal) return;
+        const name = prompt('External coworker name:', worker.name);
+        if (!name || !name.trim()) return;
+        const start = prompt('Shift start (HH:MM):', formatTime(worker.start));
+        if (!isValidClock(start)) return alert('Please use HH:MM, for example 08:00.');
+        const end = prompt('Shift end (HH:MM):', formatTime(worker.end));
+        if (!isValidClock(end)) return alert('Please use HH:MM, for example 16:00.');
+        if (timeToMinutes(makeExternalTimestamp(end)) <= timeToMinutes(makeExternalTimestamp(start))) return alert('End time must be later than start time.');
+        worker.name = name.trim();
+        worker.start = makeExternalTimestamp(start);
+        worker.end = makeExternalTimestamp(end);
+        worker.effectiveStart = makeExternalTimestamp(start);
+        renderPanel();
+    }
+
+    function removeExternalHelp(worker) {
+        if (!worker?.isExternal) return;
+        if (!confirm(`Remove external coworker ${worker.name}?`)) return;
+        const list = getExternalWorkersForSelectedDate();
+        const index = list.findIndex(item => getWorkerKey(item) === getWorkerKey(worker));
+        if (index >= 0) list.splice(index, 1);
+        delete getAssignmentsForSelectedDate()[getWorkerKey(worker)];
+        delete getNotPresentForSelectedDate()[getWorkerKey(worker)];
+        renderPanel();
+    }
+
+    function resetBoard() {
+        boardAssignments[selectedDate] = {};
+        notPresentByDate[selectedDate] = {};
+        externalWorkersByDate[selectedDate] = [];
+        unassignedCollapsedByDate[selectedDate] = false;
+        renderPanel();
+    }
+
+    function buildWorkersByArea(workers) {
+        const result = { unassigned: [], leadership: [] };
+        BOARD_AREAS.forEach(group => group.areas.forEach(area => result[area.id] = []));
+        workers.forEach(worker => (result[getWorkerAssignment(worker)] || result.unassigned).push(worker));
+        Object.keys(result).forEach(area => result[area] = sortWorkersByStart(result[area]));
+        return result;
+    }
+
+    function findAreaInfo(areaId) {
+        if (areaId === 'leadership') return { flow: 'Leadership', area: 'Order Auditor - Coordinator' };
+        if (areaId === 'unassigned') return { flow: 'Unassigned', area: 'Unassigned' };
+        for (const group of BOARD_AREAS) {
+            const area = group.areas.find(item => item.id === areaId);
+            if (area) return { flow: group.group, area: area.name };
+        }
+        return { flow: 'Unassigned', area: 'Unassigned' };
+    }
+
+
+    // ---------- Basic Plan templates ----------
+
+    function isEveningTeamWorker(worker) {
+        return timeToMinutes(getWorkerEffectiveStart(worker)) >= (11 * 60);
+    }
+
+    function isLoadingBayWorker(worker) {
+        const labels = getFunctionBadges(worker).flatMap(b => [b?.label, b?.title]).filter(Boolean).map(v => String(v).trim().toUpperCase());
+        if (labels.some(v => v === 'LB' || v.includes('LOADING BAY'))) return true;
+        const names = getFunctionNames(worker).map(name => String(name || '').trim().toLowerCase());
+        if (names.some(name => name === 'lb' || name.includes('loading bay'))) return true;
+        return (worker.functionSegments || []).some(segment => {
+            const text = `${segment?.name || ''} ${segment?.label || ''}`.trim().toLowerCase();
+            return text === 'lb' || text.includes('loading bay');
+        });
+    }
+
+    function applyBasicPlan(mode) {
+        const workers = getBoardWorkersForSelectedDate();
+        const wantEvening = mode === 'evening';
+
+        // Basic Plan is deliberately conservative:
+        // it only assigns coworkers who are still in Unassigned.
+        const eligible = sortWorkersByStart(workers.filter(worker =>
+            !worker.isExternal &&
+            !isWorkerNotPresent(worker) &&
+            getWorkerAssignment(worker) === 'unassigned' &&
+            (isLoadingBayWorker(worker) || isEveningTeamWorker(worker) === wantEvening)
+        ));
+
+        if (!eligible.length) return;
+
+        const pickers = [];
+
+        eligible.forEach(worker => {
+            const group = getUnassignedRoleGroup(worker);
+
+            if (isLoadingBayWorker(worker)) {
+                const lcd = BOARD_AREAS.find(group => group.id === 'lcd' || String(group.group || '').trim().toLowerCase() === 'lcd');
+                const loading = lcd?.areas?.find(area => String(area.name || '').trim().toLowerCase() === 'loading & checking' || String(area.id || '').endsWith('-loading-checking'));
+                if (loading) assignWorker(getWorkerKey(worker), loading.id);
+            } else if (group.id === 'coordinators' || group.id === 'order-auditors') {
+                assignWorker(getWorkerKey(worker), 'leadership');
+            } else if (group.id === 'forklift-drivers') {
+                assignWorker(
+                    getWorkerKey(worker),
+                    wantEvening ? 'fs-vulpicks' : 'cc-reachtruck'
+                );
+            } else {
+                pickers.push(worker);
+            }
+        });
+
+        // One MH picker by default; use two when the team is large.
+        const mhCount = pickers.length >= 8 ? 2 : (pickers.length ? 1 : 0);
+
+        pickers.forEach((worker, index) => {
+            assignWorker(
+                getWorkerKey(worker),
+                index < mhCount
+                    ? (wantEvening ? 'lcd-mh' : 'cc-mh')
+                    : (wantEvening ? 'lcd-floor' : 'cc-floor')
+            );
+        });
+
+        const remaining = workers.filter(worker => getWorkerAssignment(worker) === 'unassigned').length;
+        if (!remaining) unassignedCollapsedByDate[selectedDate] = true;
+        renderPanel();
+    }
+
+    function createBasicPlanMenu() {
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'position:relative;display:inline-block;';
+
+        const button = document.createElement('button');
+        button.textContent = 'Create Basic Plan';
+        button.style.cssText = `font-family:${TOOL_FONT};background:white;border:1px solid ${TP_BLUE};color:${TP_BLUE};border-radius:7px;padding:9px 14px;font-size:13px;font-weight:800;cursor:pointer;`;
+
+        const menu = document.createElement('div');
+        menu.style.cssText = 'display:none;position:absolute;right:0;top:calc(100% + 5px);min-width:245px;background:white;border:1px solid #ccc;border-radius:7px;box-shadow:0 5px 15px rgba(0,0,0,.18);overflow:hidden;z-index:100000;';
+
+        [
+            ['Morning Default', 'Morning team only - Unassigned coworkers', () => applyBasicPlan('morning')],
+            ['Evening Default', 'Evening team only - Unassigned coworkers', () => applyBasicPlan('evening')]
+        ].forEach(([label, description, action], index) => {
+            const item = document.createElement('button');
+            item.style.cssText = `display:block;width:100%;font-family:${TOOL_FONT};text-align:left;border:none;border-top:${index ? '1px solid #eee' : 'none'};background:white;padding:10px 13px;color:#222;cursor:pointer;`;
+            item.innerHTML = `<div style="font-size:13px;font-weight:800;">${escapeHTML(label)}</div><div style="margin-top:2px;font-size:10px;font-weight:600;color:#777;">${escapeHTML(description)}</div>`;
+            item.onmouseenter = () => item.style.background = '#f4f4f4';
+            item.onmouseleave = () => item.style.background = '#fff';
+            item.onclick = () => {
+                menu.style.display = 'none';
+                action();
+            };
+            menu.appendChild(item);
+        });
+
+        button.onclick = event => {
+            event.stopPropagation();
+            menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+        };
+        menu.onclick = event => event.stopPropagation();
+        document.addEventListener('click', () => menu.style.display = 'none');
+
+        wrapper.append(button, menu);
+        return wrapper;
+    }
+
+    // ---------- Board magnets ----------
+
+    function createWorkerMagnet(worker) {
+        const magnet = document.createElement('div');
+        const key = getWorkerKey(worker);
+        const notPresent = isWorkerNotPresent(worker);
+        const barBackground = worker.isExternal ? '#777777' : getFunctionBarBackground(worker);
+        magnet.draggable = !notPresent;
+        magnet.style.cssText = `position:relative;overflow:visible;font-family:${TOOL_FONT};background:${notPresent ? '#F1F1F1' : '#fff'};border:1px solid ${notPresent ? '#BDBDBD' : '#c8c8c8'};border-radius:7px;padding:8px 10px 8px 14px;margin:4px;min-width:145px;max-width:235px;box-shadow:0 2px 5px rgba(0,0,0,.12);cursor:${notPresent ? 'pointer' : 'grab'};user-select:none;opacity:${notPresent ? '.52' : '1'};`;
+        magnet.innerHTML = `
+            <span style="position:absolute;left:0;top:0;bottom:0;width:5px;background:${notPresent ? '#9A9A9A' : barBackground};border-radius:7px 0 0 7px;"></span>
+            <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:14px;font-weight:800;"><span>${escapeHTML(worker.name)}</span>${worker.isExternal ? '<span style="display:inline-flex;align-items:center;height:19px;padding:0 6px;border-radius:999px;background:#666;color:#fff;font-size:9px;font-weight:900;">EXT</span>' : renderCapabilityBadges(worker)}${notPresent ? '<span style="display:inline-flex;align-items:center;height:19px;padding:0 6px;border-radius:999px;background:#666;color:#fff;font-size:9px;font-weight:900;">ABSENCE</span>' : ''}</div>
+            <div style="margin-top:4px;font-size:12px;"><span style="font-weight:900;color:#222;">${formatTime(worker.start)}</span><span style="font-weight:700;color:#999;"> &rarr; </span><span style="font-weight:700;color:#666;">${formatTime(worker.end)}</span></div>
+            ${worker.isExternal ? '<div style="margin-top:3px;color:#777;font-size:10px;font-weight:700;">External help</div>' : renderAbsenceIndicator(worker, true)}`;
+
+        const menu = document.createElement('div');
+        menu.style.cssText = 'display:none;position:absolute;left:8px;top:calc(100% + 4px);z-index:100000;min-width:165px;background:white;border:1px solid #bbb;border-radius:7px;box-shadow:0 5px 15px rgba(0,0,0,.18);overflow:hidden;opacity:1;';
+        const actionButton = (label, handler, danger = false) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = label;
+            button.style.cssText = `display:block;width:100%;font-family:${TOOL_FONT};text-align:left;border:none;border-top:${menu.children.length ? '1px solid #eee' : 'none'};background:white;padding:9px 11px;color:${danger ? '#A12622' : '#222'};font-size:11px;font-weight:800;cursor:pointer;`;
+            button.onclick = event => { event.stopPropagation(); menu.style.display = 'none'; handler(); };
+            menu.appendChild(button);
+        };
+        actionButton(notPresent ? 'Mark as available' : 'Mark as absent', () => setWorkerNotPresent(worker, !notPresent));
+        if (worker.isExternal) {
+            actionButton('Edit external help', () => editExternalHelp(worker));
+            actionButton('Remove external help', () => removeExternalHelp(worker), true);
+        }
+        magnet.appendChild(menu);
+
+        magnet.addEventListener('click', event => {
+            if (event.defaultPrevented) return;
+            event.stopPropagation();
+            document.querySelectorAll('[data-tp-magnet-menu="1"]').forEach(other => { if (other !== menu) other.style.display = 'none'; });
+            menu.dataset.tpMagnetMenu = '1';
+            menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+        });
+
+        if (!notPresent) {
+            magnet.addEventListener('dragstart', event => {
+                draggedWorkerKey = key;
+                event.dataTransfer.setData('text/plain', key);
+                magnet.style.opacity = '.45';
+            });
+            magnet.addEventListener('dragend', () => {
+                draggedWorkerKey = null;
+                magnet.style.opacity = '1';
+            });
+        }
+        return magnet;
+    }
+
+    function createDropZone(areaId, areaName, workers) {
+        const zone = document.createElement('div');
+        const leadership = areaId === 'leadership';
+        const unassigned = areaId === 'unassigned';
+        const compactEmpty = !unassigned && !workers.length;
+        zone.style.cssText = `min-height:${compactEmpty ? '46px' : unassigned ? '80px' : leadership ? '75px' : '105px'};border:${leadership ? `2px solid ${TP_BLUE}` : `2px dashed ${unassigned ? '#aaa' : '#c5c5c5'}`};border-radius:8px;background:${leadership ? TP_LIGHT_BLUE : unassigned ? '#fafafa' : '#f8f8f8'};padding:${compactEmpty ? '8px 9px' : '9px'};transition:min-height .16s ease,background .16s ease,border-color .16s ease;`;
+
+        const header = document.createElement('div');
+        header.style.cssText = `display:flex;justify-content:space-between;align-items:center;margin-bottom:${compactEmpty ? '0' : '7px'};font-size:13px;font-weight:800;gap:8px;`;
+        header.innerHTML = `<span>${escapeHTML(areaName)}</span>${compactEmpty ? '<span style="margin-left:auto;color:#999;font-size:10px;font-weight:800;">Drop here</span>' : ''}<span style="display:inline-flex;align-items:center;justify-content:center;min-width:23px;height:23px;padding:0 6px;border-radius:999px;background:${leadership ? TP_BLUE : '#e6e6e6'};color:${leadership ? '#fff' : '#333'};font-size:12px;">${workers.length}</span>`;
+        zone.appendChild(header);
+
+        const container = document.createElement('div');
+        container.style.cssText = `display:${compactEmpty ? 'none' : 'flex'};flex-wrap:wrap;min-height:${compactEmpty ? '0' : '45px'};`;
+
+        if (unassigned) {
+            groupUnassignedWorkers(workers).forEach((group, groupIndex) => {
+                const divider = document.createElement('div');
+                divider.style.cssText = `flex-basis:100%;display:flex;align-items:center;gap:8px;margin:${groupIndex ? '9px' : '3px'} 3px 3px;color:#666;font-size:9px;font-weight:900;letter-spacing:.45px;text-transform:uppercase;`;
+                divider.innerHTML = `<span style="flex:1;height:1px;background:#D4D4D4;"></span><span>${escapeHTML(group.label)} &middot; ${group.workers.length}</span><span style="flex:1;height:1px;background:#D4D4D4;"></span>`;
+                container.appendChild(divider);
+                group.workers.forEach(worker => container.appendChild(createWorkerMagnet(worker)));
+            });
+        } else {
+            let eveningDividerAdded = false;
+            sortWorkersByStart(workers).forEach(worker => {
+                const effectiveStartTime = formatTime(getWorkerEffectiveStart(worker));
+                const [hour, minute] = effectiveStartTime.split(':').map(Number);
+                const startMinutes = (hour * 60) + minute;
+                const isEveningTeam = startMinutes >= (11 * 60);
+                if (!eveningDividerAdded && isEveningTeam) {
+                    const divider = document.createElement('div');
+                    divider.style.cssText = 'flex-basis:100%;display:flex;align-items:center;gap:8px;margin:7px 3px 3px;color:#777;font-size:9px;font-weight:900;letter-spacing:.45px;text-transform:uppercase;';
+                    divider.innerHTML = '<span style="flex:1;height:1px;background:#D4D4D4;"></span><span>Evening Team</span><span style="flex:1;height:1px;background:#D4D4D4;"></span>';
+                    container.appendChild(divider);
+                    eveningDividerAdded = true;
+                }
+                container.appendChild(createWorkerMagnet(worker));
+            });
+        }
+        if (!workers.length && !compactEmpty) container.innerHTML = '<div style="width:100%;text-align:center;padding:14px 5px;color:#999;font-size:12px;font-weight:700;">Drop here</div>';
+        zone.appendChild(container);
+
+        zone.addEventListener('dragover', event => {
+            event.preventDefault();
+            zone.style.borderColor = TP_BLUE;
+            zone.style.background = 'rgba(0,88,163,.10)';
+            if (compactEmpty) {
+                zone.style.minHeight = '82px';
+                container.style.display = 'flex';
+                container.style.minHeight = '32px';
+                container.innerHTML = '<div style="width:100%;text-align:center;padding:8px 5px;color:#6A6A6A;font-size:11px;font-weight:800;">Drop here</div>';
+            }
+        });
+        zone.addEventListener('dragleave', event => {
+            if (zone.contains(event.relatedTarget)) return;
+            if (compactEmpty) {
+                zone.style.minHeight = '46px';
+                zone.style.background = '#f8f8f8';
+                zone.style.borderColor = '#c5c5c5';
+                container.style.display = 'none';
+                container.style.minHeight = '0';
+            }
+        });
+        zone.addEventListener('drop', event => {
+            event.preventDefault();
+            const key = event.dataTransfer.getData('text/plain') || draggedWorkerKey;
+            if (!key) return;
+            assignWorker(key, areaId);
+            renderPanel();
+        });
+        return zone;
+    }
+
+    // ---------- Headers / tabs ----------
+
+    function renderDayButtons(panel) {
+        const selector = document.createElement('div');
+        selector.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;margin:15px 0;padding-bottom:14px;border-bottom:2px solid #ddd;';
+        Object.keys(currentDays).sort().forEach(date => {
+            const button = document.createElement('button');
+            const selected = date === selectedDate;
+            button.textContent = formatShortDate(date);
+            button.style.cssText = `font-family:${TOOL_FONT};border:1px solid ${selected ? TP_BLUE : '#ccc'};background:${selected ? TP_BLUE : '#f3f3f3'};color:${selected ? '#fff' : '#222'};border-radius:6px;padding:8px 13px;font-size:13px;font-weight:700;cursor:pointer;`;
+            button.onclick = () => { selectedDate = date; renderPanel(); };
+            selector.appendChild(button);
+        });
+        panel.appendChild(selector);
+    }
+
+    function renderViewTabs(panel) {
+        // TimePlan Tools now has one embedded data view (Sorted View).
+        // Board Planning is the operational Interactive Board, so the second
+        // control acts as a launcher instead of rendering a duplicate board.
+        activeView = 'sorted';
+
+        const tabs = document.createElement('div');
+        tabs.style.cssText = 'display:flex;gap:8px;margin-bottom:18px;';
+
+        const sortedButton = document.createElement('button');
+        sortedButton.textContent = 'Sorted View';
+        sortedButton.style.cssText = `font-family:${TOOL_FONT};border:2px solid ${TP_BLUE};background:${TP_BLUE};color:#fff;padding:9px 16px;border-radius:7px;font-size:14px;font-weight:700;cursor:pointer;`;
+        sortedButton.onclick = () => { activeView = 'sorted'; renderPanel(); };
+        tabs.appendChild(sortedButton);
+
+        if (isBoardDepartment()) {
+            const boardButton = document.createElement('button');
+            boardButton.textContent = 'Go to Board Planning';
+            boardButton.title = 'Open the operational Interactive Board for the selected day';
+            boardButton.style.cssText = `font-family:${TOOL_FONT};border:2px solid ${TP_BLUE};background:#fff;color:${TP_BLUE};padding:9px 16px;border-radius:7px;font-size:14px;font-weight:700;cursor:pointer;`;
+            boardButton.onclick = async () => {
+                boardButton.disabled = true;
+                const originalText = boardButton.textContent;
+                boardButton.textContent = 'Opening Board...';
+                try {
+                    await openInteractiveBoard();
+                } finally {
+                    boardButton.disabled = false;
+                    boardButton.textContent = originalText;
+                }
+            };
+            tabs.appendChild(boardButton);
+        }
+
+        panel.appendChild(tabs);
+    }
+
+    function renderDayHeader(panel, workers) {
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:18px;';
+        header.innerHTML = `<div style="font-size:20px;font-weight:800;">${escapeHTML(formatDate(workers[0].start))}</div><div style="padding:5px 10px;background:#f2f2f2;border-radius:7px;font-size:13px;font-weight:700;color:#555;">${getUniqueCoworkerCount(workers)} coworkers</div>`;
+        panel.appendChild(header);
+    }
+
+    // ---------- Interactive HTML ----------
+
+    async function getInteractiveExportData() {
+        const workers = getBoardWorkersForSelectedDate();
+        const fontFamily = getNativeTimePlanFontFamily();
+        const portableFontFaceCSS = await collectPortableTimePlanFontFaceCSS(fontFamily);
+        return {
+            date: selectedDate,
+            formattedDate: workers.length ? formatDate(workers[0].start) : selectedDate,
+            department: BOARD_DEPARTMENT_CODE,
+            fontFamily,
+            fontFaceCSS: portableFontFaceCSS || collectTimePlanFontFaceCSS(),
+            stylesheetLinks: getTimePlanStylesheetLinksHTML(),
+            workers: sortWorkersByStart(workers).map(worker => ({
+                key: getWorkerKey(worker),
+                name: worker.name,
+                employeeId: worker.employeeId,
+                isExternal: Boolean(worker.isExternal),
+                start: formatTime(worker.start),
+                end: formatTime(worker.end),
+                effectiveStart: formatTime(getWorkerEffectiveStart(worker)),
+                absences: (worker.absenceSegments || []).map(segment => ({ start: formatTime(segment.start), end: formatTime(segment.end) })),
+                badges: getFunctionBadges(worker),
+                functionNames: getFunctionNames(worker),
+                functionBar: worker.isExternal ? '#777777' : getFunctionBarBackground(worker)
+            })),
+            areas: BOARD_AREAS,
+            assignments: { ...getAssignmentsForSelectedDate() },
+            notPresent: { ...getNotPresentForSelectedDate() }
+        };
+    }
+
+    async function buildInteractiveBoardHTML() {
+        const data = await getInteractiveExportData();
+        const dataJSON = safeJSONStringify({
+            date: data.date,
+            formattedDate: data.formattedDate,
+            department: data.department,
+            fontFamily: data.fontFamily,
+            fontFaceCSS: data.fontFaceCSS,
+            workers: data.workers,
+            areas: data.areas
+        });
+        const stateJSON = safeJSONStringify({ assignments: data.assignments, notPresent: data.notPresent, supportDestinations: {}, supportTimes: {}, breaks: {}, boardFlows: data.areas, lastUpdated: new Date().toISOString() });
+
+        return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Interactive Board - ${escapeHTML(data.date)}</title>
+<style>
+${escapeStyleClose(data.fontFaceCSS)}
+*{box-sizing:border-box}body,button,input,select,textarea{font-family:${data.fontFamily || TOOL_FONT}!important}body{margin:0;padding:24px;background:#F3F4F5;color:#222;min-height:100vh;display:flex;flex-direction:column}.header{position:relative;min-height:112px;margin-bottom:20px;padding-right:760px}.title{font-size:26px;font-weight:800;color:${TP_BLUE}}.subtitle{margin-top:4px;font-size:15px;font-weight:700}.subtitle-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.header-sep{color:#AAA}.plan-updated{color:#555;font-size:12px;font-weight:700}.local-clock{margin-top:3px;color:#777;font-size:12px;font-weight:700}.meta{margin-top:3px;color:#777;font-size:12px}.actions{position:absolute;top:0;right:0;display:flex;align-items:center;justify-content:flex-end;gap:9px;flex-wrap:wrap}button{font-family:inherit;border-radius:7px;padding:9px 13px;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap}.primary{border:1px solid ${TP_BLUE};background:${TP_BLUE};color:white}.secondary{border:1px solid #AAA;background:white;color:#333}.danger{border:1px solid #B42318;background:#B42318;color:white}.share-wrap{position:relative}.share-menu{display:none;position:absolute;right:0;top:calc(100% + 5px);min-width:260px;background:white;border:1px solid #CCC;border-radius:7px;box-shadow:0 5px 15px rgba(0,0,0,.18);overflow:hidden;z-index:100000}.share-menu button{display:block;width:100%;text-align:left;border:none;border-top:1px solid #EEE;background:white;padding:11px 13px;color:#222;font-size:12px;font-weight:800;border-radius:0}.share-menu button:first-child{border-top:none}.share-menu button.share-primary{background:${TP_BLUE};color:white}.flow[draggable="true"]>.flow-header{cursor:grab}.flow.dragging{opacity:.45}.flow.dragging>.flow-header{position:relative!important;top:auto!important}.flow-controls,.area-controls{display:flex;align-items:center;gap:5px}.flow-controls.edit-only,.area-controls.edit-only{display:none}body.board-edit-mode .flow-controls.edit-only,body.board-edit-mode .area-controls.edit-only{display:flex}body.board-edit-mode .worker{cursor:default;opacity:.72}body.board-edit-mode .worker .break-chip,body.board-edit-mode .worker .magnet-menu{pointer-events:none}body.board-edit-mode .dropzone{cursor:default}body.board-edit-mode .board-operation{opacity:.45;cursor:not-allowed}.area-controls{margin-left:auto;flex:0 0 auto}.area-title{min-width:0}.area-header .compact-hint{margin-left:auto}.area-header .area-controls+.area-count{flex:0 0 auto}.flow-control,.area-control{border:1px solid rgba(255,255,255,.55);background:rgba(255,255,255,.12);color:inherit;border-radius:5px;padding:3px 6px;font-size:10px;line-height:1;cursor:pointer}.area-control{border-color:#BBB;background:white;color:#555}.break-chip{position:absolute;right:6px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;justify-content:center;width:38px;height:38px;padding:2px;border:1px solid #B9D4EA;border-radius:6px;background:#EEF4FA;color:#0058A3;font-size:8px;font-weight:900;line-height:1;text-align:center;cursor:pointer;white-space:normal;letter-spacing:.05px}.break-chip .break-plus{font-size:15px;line-height:12px;margin-bottom:2px}.break-chip .break-word{font-size:7px;line-height:8px}.break-chip.scheduled{width:46px;background:#FFF1DE;border-color:#E6A04B;color:#9A4F00}.break-chip.active{width:46px;background:#FFF1DE;border-color:#E07A00;color:#8A3F00}.break-chip.scheduled .break-word{font-size:7px;line-height:8px}.break-chip .break-time{font-size:10px;line-height:11px;font-weight:900}.break-status{position:absolute;right:6px;top:56px;width:46px;text-align:center;font-size:8px;line-height:9px;font-weight:900;color:#A15C00;white-space:nowrap}.worker.has-break{padding-right:76px}.worker.has-active-break{min-height:78px;padding-right:76px}.worker.has-active-break .break-chip{top:10px;transform:none}.worker.has-active-break .worker-time{font-size:10.5px;letter-spacing:-.08px}.worker.has-active-break .worker-absence{margin-left:5px}.break-status.active{color:#8A3F00}.flow-drop-before{box-shadow:-5px 0 0 #0058A3}.flow-drop-after{box-shadow:5px 0 0 #0058A3}.status{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;font-size:12px;color:#666}.unassigned,.leadership,.area{border-radius:8px;padding:9px}.unassigned-sticky{position:sticky;top:8px;z-index:60;margin-bottom:12px;padding:4px 0;background:#F3F4F5;border-radius:9px;box-shadow:0 8px 16px -15px rgba(0,0,0,.7);overscroll-behavior:contain}.unassigned{border:2px dashed #AAA;background:#FFF}.leadership{margin-bottom:16px;border:2px solid ${TP_BLUE};background:${TP_LIGHT_BLUE}}.board{display:grid;grid-template-columns:repeat(3,minmax(280px,1fr));gap:14px;align-items:start}.board-column{display:flex;flex-direction:column;gap:14px;min-width:0}.flow{border:1px solid #D5D5D5;border-radius:9px;overflow:visible;background:#FFF}.flow-header{position:sticky;top:var(--flow-sticky-top,8px);z-index:45;display:flex;justify-content:space-between;align-items:center;padding:12px 13px;background:rgba(0,88,163,.93);color:white;font-size:15px;font-weight:800;border-radius:8px 8px 0 0}.flow-count,.area-count{display:inline-flex;justify-content:center;align-items:center;min-width:24px;height:24px;padding:0 6px;border-radius:999px;font-size:11px;font-weight:800}.flow-count{background:white;color:${TP_BLUE}}.area-count{background:#E6E6E6;color:#333}.flow-content{display:flex;flex-direction:column;gap:10px;padding:10px}.area{min-height:105px;background:#F8F8F8;border:2px dashed #C5C5C5;transition:min-height .16s ease,background .16s ease,border-color .16s ease}.area.compact-empty{min-height:46px;padding:8px 9px}.area-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;font-size:13px;font-weight:800;gap:8px}.compact-empty .area-header{margin-bottom:0}.cards{display:flex;flex-wrap:wrap;min-height:45px}.compact-empty .cards{display:none;min-height:0}.compact-empty.drop-active{min-height:82px}.compact-empty.drop-active .cards{display:flex}.compact-empty.drop-active .compact-hint{color:${TP_BLUE}}.worker{position:relative;overflow:visible;margin:4px;min-width:175px;max-width:285px;padding:8px 14px 8px 14px;background:white;border:1px solid #C8C8C8;border-radius:7px;box-shadow:0 2px 5px rgba(0,0,0,.12);cursor:grab;user-select:none}.worker.not-present{background:#ECECEC;border-color:#B9B9B9;cursor:pointer}.worker.shift-ended{background:#F4F4F4;border-color:#C9C9C9}.worker.shift-ended>.function-bar,.worker.shift-ended>.worker-name,.worker.shift-ended>.worker-time,.worker.shift-ended>.worker-absence,.worker.shift-ended>.support-note{opacity:.60}.worker.shift-ended>.magnet-menu{opacity:1!important}.shift-status{margin-top:3px;font-size:9px;font-weight:900}.shift-soon{position:absolute;right:7px;bottom:5px;margin-top:0;color:#A15C00;text-align:right}.shift-ended-label{color:#777}.support-note{margin-top:3px;color:#A55200;font-size:10px;font-weight:800}.support-flow{border:2px solid #E07A00;background:#FFF1DE;border-radius:9px;padding:9px;min-height:46px}.support-flow.compact-empty{padding:8px 9px}.support-flow .area-header{margin-bottom:7px}.support-flow.compact-empty .area-header{margin-bottom:0}.support-flow.compact-empty .cards{display:none}.support-flow.compact-empty.drop-active{min-height:82px}.support-flow.compact-empty.drop-active .cards{display:flex}.worker.not-present>.function-bar,.worker.not-present>.worker-name,.worker.not-present>.worker-time,.worker.not-present>.worker-absence{opacity:.52}.worker.menu-open{z-index:2147483645}.worker.magnet-clicked{animation:magnetPulse .18s ease-out}@keyframes magnetPulse{0%{box-shadow:0 2px 5px rgba(0,0,0,.12)}45%{box-shadow:0 0 0 4px rgba(0,88,163,.20),0 2px 5px rgba(0,0,0,.12)}100%{box-shadow:0 2px 5px rgba(0,0,0,.12)}}.function-bar{position:absolute;left:0;top:0;bottom:0;width:5px;border-radius:7px 0 0 7px}.worker-name{display:flex;flex-wrap:wrap;align-items:center;column-gap:5px;row-gap:2px;font-size:14px;font-weight:800;line-height:1.15}.worker-name>span:first-child{min-width:0}.worker-time{margin-top:4px;font-size:11px;display:flex;flex-wrap:nowrap;align-items:center;gap:0;white-space:nowrap}.worker-start{font-weight:900}.worker-arrow{font-weight:700;color:#999}.worker-end{font-weight:700;color:#666}.worker-absence{display:inline-flex;flex-wrap:nowrap;gap:3px;align-items:center;margin-left:6px;vertical-align:middle;white-space:nowrap}.absence-item{display:inline-flex;align-items:center;gap:4px}.absence-label{padding:1px 4px;border:1px solid #C85B52;border-radius:4px;background:#FFF8F7;color:#9E2F28;font-size:9px;font-weight:900}.absence-time{color:#8A4B47;font-size:9px;font-weight:700}.role-divider,.shift-divider{flex-basis:100%;display:flex;align-items:center;gap:8px;margin:7px 3px 3px;color:#777;font-size:9px;font-weight:900;letter-spacing:.45px;text-transform:uppercase}.role-divider:before,.role-divider:after,.shift-divider:before,.shift-divider:after{content:'';flex:1;height:1px;background:#D4D4D4}.badge{display:inline-flex;align-items:center;justify-content:center;height:19px;padding:0 6px;border-radius:999px;font-size:9px;font-weight:800;white-space:nowrap}.drop-active{border-color:${TP_BLUE}!important;background:rgba(0,88,163,.10)!important}.magnet-menu{display:none;position:fixed;z-index:2147483646;min-width:180px;background:white;border:1px solid #BBB;border-radius:7px;box-shadow:0 5px 15px rgba(0,0,0,.18);overflow:hidden;opacity:1}.magnet-menu button{display:block;width:100%;text-align:left;border:none;border-top:1px solid #EEE;background:white;padding:9px 11px;color:#222;font-size:11px;font-weight:800;border-radius:0}.compact-hint{color:#999;font-size:10px;font-weight:800}.unassigned-show{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;border:1px solid #BBB;background:#FFF;color:#555;border-radius:5px;padding:3px 6px;font-size:10px;line-height:1;font-weight:800;letter-spacing:0}.board{margin-bottom:14px}.handover-notes{border:1px solid #D6C58A;border-radius:9px;background:#FFF9E8;padding:12px}.handover-notes-title{font-size:13px;font-weight:900;color:#4A4330;margin-bottom:8px;letter-spacing:.2px}.handover-notes textarea{display:block;width:100%;min-height:110px;resize:vertical;border:1px solid #D8D0B5;border-radius:7px;background:#FFFDF7;padding:10px 11px;color:#333;font:inherit;font-size:12px;line-height:1.4;outline:none}.handover-notes textarea:focus{border-color:#B7A35D;box-shadow:0 0 0 2px rgba(183,163,93,.14)}.handover-notes-hint{margin-top:6px;color:#8A8062;font-size:9px;font-weight:700}.handover-reminder{display:none;position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.28);align-items:center;justify-content:center;padding:20px}.handover-reminder.show{display:flex}.handover-reminder-card{width:min(360px,100%);background:#FFF;border-radius:10px;box-shadow:0 12px 35px rgba(0,0,0,.28);padding:20px}.handover-reminder-title{font-size:18px;font-weight:900;margin-bottom:18px}.handover-reminder-actions{display:flex;justify-content:flex-end;gap:9px}@media(max-width:1100px){.header{padding-right:0;padding-top:110px}.actions{left:0;right:0;justify-content:flex-start}.board{grid-template-columns:repeat(2,minmax(280px,1fr))}}@media(max-width:760px){.board{grid-template-columns:1fr}}@media(max-width:620px){body{padding:16px}.header{padding-top:165px}}
+@media print{@page{size:A4 landscape;margin:8mm}html,body{background:white!important}body{padding:0!important;font-size:10px}.header{min-height:auto!important;margin-bottom:8px!important;padding:0!important}.title{font-size:20px!important}.subtitle{font-size:12px!important}.plan-updated,.local-clock,.meta{font-size:9px!important}.actions,.status,.handover-reminder{display:none!important}.unassigned-sticky{position:static!important;max-height:none!important;overflow:visible!important;margin-bottom:7px!important;padding:0!important;background:transparent!important;box-shadow:none!important}.unassigned,.leadership,.area{break-inside:avoid;border-radius:5px!important;padding:5px!important}.leadership{margin-bottom:7px!important}.board{display:grid!important;grid-template-columns:repeat(var(--print-columns,3),minmax(0,1fr))!important;gap:7px!important;align-items:start}.board-column{display:contents!important}.support-flow{grid-column:auto!important}.handover-notes{break-inside:avoid!important;padding:7px!important}.handover-notes-title{font-size:10px!important;margin-bottom:5px!important}.handover-notes textarea{min-height:70px!important;padding:6px!important;font-size:9px!important;border-width:1px!important}.handover-notes-hint{display:none!important}.flow{break-inside:avoid;border-radius:5px!important}.flow-header{position:static!important;padding:7px 8px!important;font-size:11px!important;border-radius:4px 4px 0 0!important}.flow-content{gap:5px!important;padding:5px!important}.area{min-height:0!important;border-width:1px!important}.area-header{margin-bottom:4px!important;font-size:10px!important}.cards{min-height:0!important}.worker{break-inside:avoid;margin:2px!important;min-width:0!important;max-width:none!important;padding:5px 6px 5px 10px!important;border-radius:5px!important;box-shadow:none!important}.worker-name{font-size:10px!important;gap:3px!important}.worker-time{margin-top:2px!important;font-size:9px!important}.worker-absence{margin-top:2px!important}.badge{height:15px!important;padding:0 4px!important;font-size:7px!important}.role-divider,.shift-divider{margin:4px 2px 2px!important;font-size:7px!important}.area-count,.flow-count{min-width:18px!important;height:18px!important;font-size:8px!important}.print-hidden{display:none!important}.compact-hint,.magnet-menu,#hideUnassigned,#showUnassigned{display:none!important}.compact-empty .cards{display:flex!important}.compact-empty{min-height:0!important}.function-bar{width:4px!important}.break-chip{display:none!important}}
+</style>
+</head>
+<body>
+<script id="tp-state" type="application/json">${stateJSON}</script>
+<div class="header"><div><div class="title">Daily Board Plan</div><div class="subtitle subtitle-line"><span id="dateLabel"></span><span class="header-sep">&middot;</span><span class="plan-updated" id="planUpdated"></span></div><div class="local-clock" id="localClock"></div><div class="meta">Department ${escapeHTML(data.department)}</div></div><div class="actions"><div style="position:relative"><button class="secondary" id="basicPlanButton" data-board-operation="1" style="border-color:${TP_BLUE};color:${TP_BLUE}">Create Basic Plan</button><div id="basicPlanMenu" style="display:none;position:absolute;right:0;top:calc(100% + 5px);min-width:245px;background:white;border:1px solid #CCC;border-radius:7px;box-shadow:0 5px 15px rgba(0,0,0,.18);overflow:hidden;z-index:100000"><button class="basic-plan-choice" data-mode="morning" style="display:block;width:100%;text-align:left;border:none;background:white;padding:10px 13px;color:#222"><strong>Morning Default</strong><span style="display:block;margin-top:2px;font-size:10px;color:#777">Morning team only - Unassigned coworkers</span></button><button class="basic-plan-choice" data-mode="evening" style="display:block;width:100%;text-align:left;border:none;border-top:1px solid #EEE;background:white;padding:10px 13px;color:#222"><strong>Evening Default</strong><span style="display:block;margin-top:2px;font-size:10px;color:#777">Evening team only - Unassigned coworkers</span></button></div></div><button class="secondary" id="externalButton" data-board-operation="1">+ External Help</button><button class="secondary" id="kraftButton" data-board-operation="1">+ Quick KRAFTSAMLA</button><button class="secondary" id="editFlowsButton">Edit Flows</button><button class="secondary" id="addFlowButton" style="display:none">+ Add Flow</button><div class="share-wrap"><button class="primary" id="shareButton" data-board-operation="1">Save Plan</button><div class="share-menu" id="shareMenu"><button data-share="quick" class="share-primary">Share Plan for HANDOVER</button><button data-share="pdf">Export PDF</button></div></div><button class="danger" id="resetButton" data-board-operation="1">Reset Board</button></div></div>
+<div class="status"><span id="coworkerCount"></span><span id="lastChange"></span></div>
+<div id="unassignedWrapper"><div id="unassigned"></div></div><div id="leadership"></div><div id="board" class="board"></div><div id="handoverReminder" class="handover-reminder"><div class="handover-reminder-card"><div class="handover-reminder-title">Share handover now?</div><div class="handover-reminder-actions"><button class="secondary" id="handoverNotNow">Not now</button><button class="primary" id="handoverSaveNow">Save Plan</button></div></div></div>
+<script>
+const DATA=${dataJSON};
+let state={assignments:{},notPresent:{},supportDestinations:{},supportTimes:{},breaks:{},boardFlows:null,handoverNotes:'',lastUpdated:null};
+try{state={...state,...JSON.parse(document.getElementById('tp-state').textContent||'{}')}}catch{}
+let assignments=state.assignments||{};
+let notPresent=state.notPresent||{};
+let supportDestinations=state.supportDestinations||{};
+let supportTimes=state.supportTimes||{};
+let breaks=state.breaks||{};
+let boardFlows=Array.isArray(state.boardFlows)?state.boardFlows.map(g=>({id:g.id,group:g.group,areas:(g.areas||[]).map(a=>({...a}))})):DATA.areas.map(g=>({id:g.id,group:g.group,areas:(g.areas||[]).map(a=>({...a}))}));
+let handoverNotes=typeof state.handoverNotes==='string'?state.handoverNotes:'';
+
+let handoverReminderShown=false;
+let externalWorkers=Array.isArray(state.externalWorkers)?state.externalWorkers:[];
+let workerOverrides=state.workerOverrides||{};
+let lastUpdated=state.lastUpdated||new Date().toISOString();
+const ORIGINAL_WORKERS=new Map(DATA.workers.map(w=>[w.key,{start:w.start,end:w.end,effectiveStart:w.effectiveStart}]));
+externalWorkers.forEach(w=>{if(w&&w.key&&!DATA.workers.some(x=>x.key===w.key))DATA.workers.push(w)});
+Object.entries(workerOverrides).forEach(([key,o])=>{const w=DATA.workers.find(x=>x.key===key);if(w&&o){if(o.start)w.start=o.start;if(o.end)w.end=o.end;if(o.effectiveStart)w.effectiveStart=o.effectiveStart}});
+Object.entries(assignments).forEach(([key,dest])=>{if(String(dest).startsWith('pup-'))assignments[key]='unassigned'});
+let draggedKey=null;
+let draggedFlowId=null;
+let unassignedCollapsed=false;
+let boardEditMode=false;
+let dirty=false;
+function setDirty(value=true){dirty=value}
+function syncExternalWorkers(){externalWorkers=DATA.workers.filter(w=>w.isExternal).map(w=>({...w}))}
+function esc(v){return String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;')}
+function contrast(hex){const c=String(hex||'#666666').replace('#','');const r=parseInt(c.substring(0,2),16),g=parseInt(c.substring(2,4),16),b=parseInt(c.substring(4,6),16);return((r*299+g*587+b*114)/1000)>155?'#222':'#FFF'}
+function assignment(w){return assignments[w.key]||'unassigned'}
+function workersFor(area){return DATA.workers.filter(w=>assignment(w)===area)}
+function timeMinutes(v){const p=String(v||'00:00').split(':').map(Number);return((p[0]||0)*60)+(p[1]||0)}
+function roleGroup(w){if(w.isExternal)return{id:'external-help',label:'EXTERNAL HELP'};const labels=new Set((w.badges||[]).map(b=>b.label));if(labels.has('COORD'))return{id:'coordinators',label:'COORDINATORS'};if(labels.has('OA'))return{id:'order-auditors',label:'ORDER AUDITORS'};if(labels.has('FLT'))return{id:'forklift-drivers',label:'FORKLIFT DRIVERS'};return{id:'order-pickers',label:'ORDER PICKERS'}}
+function sortWorkers(ws){return[...ws].sort((a,b)=>timeMinutes(a.effectiveStart||a.start)-timeMinutes(b.effectiveStart||b.start)||timeMinutes(a.start)-timeMinutes(b.start)||a.name.localeCompare(b.name))}
+function groupedUnassigned(ws){const defs=[['coordinators','COORDINATORS'],['order-auditors','ORDER AUDITORS'],['forklift-drivers','FORKLIFT DRIVERS'],['order-pickers','ORDER PICKERS'],['external-help','EXTERNAL HELP']];return defs.map(([id,label])=>({id,label,workers:sortWorkers(ws.filter(w=>roleGroup(w).id===id))})).filter(g=>g.workers.length)}
+function isLB(w){const labels=(w.badges||[]).flatMap(b=>[b&&b.label,b&&b.title]).filter(Boolean).map(v=>String(v).trim().toUpperCase());if(labels.some(v=>v==='LB'||v.includes('LOADING BAY')))return true;const names=(w.functionNames||[]).map(n=>String(n||'').trim().toLowerCase());if(names.some(n=>n==='lb'||n.includes('loading bay')))return true;return String(w.function||w.role||'').toLowerCase().includes('loading bay')}
+function existingAreaIds(){return new Set(boardFlows.flatMap(g=>(g.areas||[]).map(a=>a.id)))}
+function normalizeAssignments(){const valid=existingAreaIds();let changed=false;Object.keys(assignments).forEach(key=>{const dest=assignments[key];if(dest&&dest!=='unassigned'&&dest!=='leadership'&&dest!=='support'&&!valid.has(dest)){assignments[key]='unassigned';changed=true}});if(changed)unassignedCollapsed=false;return changed}
+function areaByMeaning(flow,meaning){const q=String(meaning||'').toLowerCase();const suffix={'floor':'-floor','mh':'-mh','reachtruck':'-reachtruck','loading & checking':'-loading-checking'}[q]||'';return(flow?.areas||[]).find(a=>String(a.name||'').toLowerCase()===q||(suffix&&String(a.id||'').toLowerCase().endsWith(suffix)))||null}
+function applyBasicPlan(mode){normalizeAssignments();const evening=mode==='evening';const targetFlow=boardFlows[evening?1:0];if(!targetFlow){alert((evening?'Evening':'Morning')+' Basic Plan needs '+(evening?'Flow 2':'Flow 1')+' to exist.');return}const eligible=sortWorkers(DATA.workers.filter(w=>!w.isExternal&&!notPresent[w.key]&&assignment(w)==='unassigned'&&(isLB(w)||((timeMinutes(w.effectiveStart||w.start)>=660)===evening))));if(!eligible.length)return;const floor=areaByMeaning(targetFlow,'Floor'),mh=areaByMeaning(targetFlow,'MH');const lcdFlow=boardFlows.find(g=>g.id==='lcd'||String(g.group||'').trim().toLowerCase()==='lcd');const loading=lcdFlow&&areaByMeaning(lcdFlow,'Loading & Checking');const ccFlow=boardFlows.find(g=>g.id==='click-collect'||String(g.group).toLowerCase().includes('click'));const fsFlow=boardFlows.find(g=>g.id==='fullserve'||String(g.group).toLowerCase().includes('fullserve'));const forkliftDest=evening?(fsFlow&&areaByMeaning(fsFlow,'VULPICKS')):(ccFlow&&areaByMeaning(ccFlow,'Reachtruck'));const pickers=[];eligible.forEach(w=>{const g=roleGroup(w);let dest=null;if(isLB(w)){dest=loading}else if(g.id==='coordinators'||g.id==='order-auditors'){dest={id:'leadership'}}else if(g.id==='forklift-drivers'){dest=forkliftDest}else pickers.push(w);if(dest)assignments[w.key]=dest.id});const mhCount=pickers.length>=8?2:(pickers.length?1:0);pickers.forEach((w,i)=>{const dest=i<mhCount?mh:floor;if(dest)assignments[w.key]=dest.id});if(!workersFor('unassigned').length)unassignedCollapsed=true;setDirty();last((evening?'Evening':'Morning')+' basic plan created');render()}
+function badgesHTML(w){return(w.badges||[]).map(b=>{const c=b.color||'#666';return '<span class="badge" title="'+esc(b.title)+'" style="background:'+c+';border:1px solid '+c+';color:'+contrast(c)+'">'+esc(b.label)+'</span>'}).join('')}
+function absenceHTML(w){if(!(w.absences||[]).length)return'';return '<span class="worker-absence">'+w.absences.map(a=>'<span class="absence-item"><span class="absence-label">ABS</span><span class="absence-time">'+esc(a.start)+'&ndash;'+esc(a.end)+'</span></span>').join('')+'</span>'}
+function formatClock(d,withSeconds=false){return d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',...(withSeconds?{second:'2-digit'}:{})})}
+function refreshHeaderTimes(){const updated=document.getElementById('planUpdated');if(updated){const d=new Date(lastUpdated);updated.textContent='Last updated plan: '+(Number.isNaN(d.getTime())?'--:--':formatClock(d))}const clock=document.getElementById('localClock');if(clock)clock.textContent='Local time: '+formatClock(new Date(),true)}
+function touchPlan(){lastUpdated=new Date().toISOString();refreshHeaderTimes()}
+function last(text){document.getElementById('lastChange').textContent=text;touchPlan()}
+function localISODate(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+function currentMinutes(){const now=new Date();return now.getHours()*60+now.getMinutes()}
+function hasActiveAbsence(w,m=currentMinutes()){return (w.absences||[]).some(a=>m>=timeMinutes(a.start)&&m<timeMinutes(a.end))}
+function shiftStatus(w){if(DATA.date!==localISODate())return null;const m=currentMinutes(),end=timeMinutes(w.end);if(hasActiveAbsence(w,m))return null;const bs=breakStatus(w);if(bs&&bs.active)return null;if(end-m<=45&&end-m>=0)return{soon:true,text:'OFF SOON'};if(m>=end)return{ended:true,text:'SHIFT ENDED'};return null}
+function breakStatus(w){if(DATA.date!==localISODate()||notPresent[w.key]||hasActiveAbsence(w))return null;const b=breaks[w.key];if(!b||b.dismissed)return null;const m=currentMinutes(),start=timeMinutes(b.start),end=timeMinutes(b.end);if(m>=start&&m<=end+10)return{active:true,text:'ON BREAK'};return null}
+function breakIsPending(w){const b=breaks[w.key];if(!b||b.dismissed||DATA.date!==localISODate())return !!(b&&!b.dismissed);return currentMinutes()<timeMinutes(b.start)}
+function breakIsFinished(w){const b=breaks[w.key];if(!b||b.dismissed)return true;if(DATA.date!==localISODate())return false;return currentMinutes()>timeMinutes(b.end)+10}
+function isWorkerActive(w){return !notPresent[w.key]&&!((shiftStatus(w)||{}).ended)}
+function addMinutesToClock(start,mins){let total=timeMinutes(start)+Number(mins||0);total=Math.max(0,Math.min(1439,total));return String(Math.floor(total/60)).padStart(2,'0')+':'+String(total%60).padStart(2,'0')}
+function editBreak(key,w){const old=breaks[key]||{};const start=prompt('Break start (HH:MM):',old.start||'12:00');if(start===null)return false;if(!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(start||'')){alert('Please use a valid HH:MM time.');return false}const durationRaw=prompt('Break duration in minutes:',old.start&&old.end?String(timeMinutes(old.end)-timeMinutes(old.start)):'30');if(durationRaw===null)return false;const duration=Number(durationRaw);if(!Number.isFinite(duration)||duration<=0||duration>180){alert('Please use a break duration between 1 and 180 minutes.');return false}const end=addMinutesToClock(start,duration);if(timeMinutes(end)<=timeMinutes(start)){alert('The break must finish on the same day.');return false}breaks[key]={start,end,dismissed:false};return true}
+function workerHTML(w){const np=!!notPresent[w.key];const adjusted=!!workerOverrides[w.key]&&!w.isExternal;const bs=np?null:breakStatus(w);const ss=np||bs&&bs.active?null:shiftStatus(w);const storedBreak=breaks[w.key]||null;const pendingBreak=!np&&!(ss&&ss.ended)&&!hasActiveAbsence(w)&&breakIsPending(w);const finishedBreak=storedBreak&&breakIsFinished(w);const br=pendingBreak?storedBreak:null;const canShowBreakChip=!np&&!(ss&&ss.ended)&&!hasActiveAbsence(w);const breakChip=canShowBreakChip?(bs&&bs.active?'<span class="break-chip active" data-break-shortcut="1" title="Edit break"><span class="break-word">BREAK</span><span class="break-time">'+esc(storedBreak.start)+'</span></span><span class="break-status active">ON BREAK</span>':(br?'<span class="break-chip scheduled" data-break-shortcut="1" title="Edit break"><span class="break-word">BREAK</span><span class="break-time">'+esc(br.start)+'</span></span>':'')):'';const hasEditableBreak=!!storedBreak&&!finishedBreak&&!storedBreak.dismissed;const support=assignment(w)==='support'?(supportDestinations[w.key]||'Other department'):'';const supportTime=support?(supportTimes[w.key]||null):null;const supportLabel=support?(support+(supportTime?' · '+supportTime.start+'-'+supportTime.end:'')):'';return '<div class="worker'+(np?' not-present':'')+(ss&&ss.ended?' shift-ended':'')+((bs&&bs.active)||br?' has-break':'')+(bs&&bs.active?' has-active-break':'')+'" draggable="'+(!np&&!boardEditMode)+'" data-worker-key="'+esc(w.key)+'"><span class="function-bar" style="background:'+(np?'#999':w.functionBar)+'"></span><div class="worker-name"><span>'+esc(w.name)+'</span>'+(w.isExternal?'<span class="badge" style="background:#666;color:#fff">EXT</span>':badgesHTML(w))+(adjusted?'<span class="badge" style="background:#7A5AF8;color:#fff" title="Board time adjusted manually">TIME</span>':'')+(np?'<span class="badge" style="background:#666;color:#fff">ABSENCE</span>':'')+'</div><div class="worker-time"><span class="worker-start">'+esc(w.start)+'</span><span class="worker-arrow"> &rarr; </span><span class="worker-end">'+esc(w.end)+'</span>'+(!w.isExternal?absenceHTML(w):'')+'</div>'+(w.isExternal?'<div style="margin-top:3px;color:#777;font-size:10px;font-weight:700">External help</div>':'')+breakChip+(support?'<div class="support-note">SUPPORT · '+esc(supportLabel)+'</div>':'')+(ss?'<div class="shift-status '+(ss.ended?'shift-ended-label':'shift-soon')+'">'+ss.text+'</div>':'')+'<div class="magnet-menu"><button data-action="presence">'+(np?'Mark as available':'Mark as absent')+'</button><button data-action="break">'+(hasEditableBreak?'Edit break':'Set break')+'</button>'+(bs&&bs.active?'<button data-action="break-available">Mark as available from break</button>':'')+(hasEditableBreak?'<button data-action="remove-break">Remove break</button>':'')+'<button data-action="time">Edit board time</button><button data-action="support">Support other department</button>'+(support?'<button data-action="edit-support">Edit support details</button>':'')+(adjusted?'<button data-action="restore-time">Restore TimePlan time</button>':'')+(w.isExternal?'<button data-action="edit">Edit external help</button><button data-action="remove" style="color:#A12622">Remove external help</button>':'')+'</div></div>'}
+function cardsHTML(ws,id){if(id==='unassigned')return groupedUnassigned(ws).map(g=>'<div class="role-divider"><span>'+esc(g.label)+' &middot; '+g.workers.filter(isWorkerActive).length+'</span></div>'+g.workers.map(workerHTML).join('')).join('');let eveningAdded=false;return sortWorkers(ws).map(w=>{const evening=timeMinutes(w.effectiveStart||w.start)>=660;let d='';if(!eveningAdded&&evening){d='<div class="shift-divider"><span>Evening Team</span></div>';eveningAdded=true}return d+workerHTML(w)}).join('')}
+function makeZone(id,name,extra='area',editable=false){const ws=workersFor(id);const activeCount=ws.filter(isWorkerActive).length;if(id==='unassigned'&&unassignedCollapsed)return '<div class="'+extra+' dropzone unassigned-compact" data-area-id="'+id+'"><div class="area-header" style="margin-bottom:0"><span>'+esc(name)+' <span class="area-count">'+activeCount+'</span></span><span class="compact-hint unassigned-show">SHOW</span></div></div>';const compact=!ws.length&&id!=='unassigned';const controls=editable?'<span class="area-controls edit-only"><button class="area-control" data-area-action="rename" data-area-id="'+esc(id)+'" title="Rename area">EDIT</button><button class="area-control" data-area-action="delete" data-area-id="'+esc(id)+'" title="Delete area">DELETE</button></span>':'';const unassignedHide=id==='unassigned'?'<button class="area-control unassigned-hide" data-unassigned-hide="1" title="Collapse unassigned">HIDE</button>':'';return '<div class="'+extra+' dropzone'+(compact?' compact-empty':'')+'" data-area-id="'+id+'"><div class="area-header"><span class="area-title">'+esc(name)+'</span>'+(compact?'<span class="compact-hint">Drop here</span>':'')+controls+'<span class="area-count">'+activeCount+'</span>'+unassignedHide+'</div><div class="cards">'+cardsHTML(ws,id)+'</div></div>'}
+function render(){normalizeAssignments();document.body.classList.toggle('board-edit-mode',boardEditMode);document.body.classList.toggle('board-edit-mode',boardEditMode);document.getElementById('dateLabel').textContent=DATA.formattedDate;refreshHeaderTimes();const planned=DATA.workers.length;const available=DATA.workers.filter(isWorkerActive).length;const np=DATA.workers.filter(w=>notPresent[w.key]).length;document.getElementById('coworkerCount').textContent=planned+' planned today · '+available+' available'+(np?' · '+np+' absence':'');const uw=document.getElementById('unassignedWrapper');if(!workersFor('unassigned').length)unassignedCollapsed=true;uw.className='unassigned-sticky';uw.style.maxHeight=unassignedCollapsed?'none':'38vh';uw.style.overflowY=unassignedCollapsed?'visible':'auto';document.getElementById('unassigned').innerHTML=makeZone('unassigned','UNASSIGNED','unassigned');document.getElementById('leadership').innerHTML=makeZone('leadership','ORDER AUDITOR - COORDINATOR','leadership');const supportWorkers=workersFor('support');const supportCount=supportWorkers.filter(isWorkerActive).length;const supportHTML=supportWorkers.length?'<section id="support" class="support-flow dropzone" data-area-id="support"><div class="area-header"><span>SUPPORT OTHER DEPARTMENTS</span><span class="area-count">'+supportCount+'</span></div><div class="cards">'+supportWorkers.map(workerHTML).join('')+'</div></section>':'';const flowHTML=g=>'<section class="flow" draggable="true" data-flow-id="'+esc(g.id)+'"><div class="flow-header"><span>'+esc(g.group)+'</span><span class="flow-controls edit-only"><button class="flow-control" data-flow-action="rename" data-flow-id="'+esc(g.id)+'">EDIT</button><button class="flow-control" data-flow-action="add-area" data-flow-id="'+esc(g.id)+'">+ AREA</button><button class="flow-control" data-flow-action="delete" data-flow-id="'+esc(g.id)+'">DELETE</button><span class="flow-count">'+g.areas.reduce((t,a)=>t+workersFor(a.id).filter(isWorkerActive).length,0)+'</span></span></div><div class="flow-content">'+g.areas.map(a=>makeZone(a.id,a.name,'area',true)).join('')+'</div></section>';const board=document.getElementById('board');const width=window.innerWidth;const columnCount=width<=760?1:(width<=1100?2:3);board.innerHTML=Array.from({length:columnCount},()=>'<div class="board-column"></div>').join('');const boardColumns=[...board.querySelectorAll('.board-column')];const blocks=boardFlows.map(g=>({html:flowHTML(g),kind:'flow'}));if(supportHTML)blocks.push({html:supportHTML,kind:'support'});blocks.forEach((block,index)=>{let target;if(index<columnCount&&block.kind==='flow'){target=boardColumns[index]}else{target=boardColumns.reduce((best,col)=>col.scrollHeight<best.scrollHeight?col:best,boardColumns[0])}target.insertAdjacentHTML('beforeend',block.html)});const notesColumn=boardColumns[boardColumns.length-1];if(notesColumn)notesColumn.insertAdjacentHTML('beforeend','<section class="handover-notes"><div class="handover-notes-title">HANDOVER NOTES</div><textarea id="handoverNotesInput" maxlength="2000" placeholder="Write notes for the next team...">'+esc(handoverNotes)+'</textarea><div class="handover-notes-hint">Saved with Share Plan for HANDOVER</div></section>');bind();const notesInput=document.getElementById('handoverNotesInput');if(notesInput)notesInput.addEventListener('input',()=>{handoverNotes=notesInput.value;setDirty()});updateSticky()}
+function updateSticky(){const w=document.getElementById('unassignedWrapper');document.documentElement.style.setProperty('--flow-sticky-top',(Math.ceil(w.getBoundingClientRect().height)+16)+'px')}
+function positionMenu(el,m){if(!el||!m||m.style.display!=='block')return;const r=el.getBoundingClientRect();if(r.bottom<0||r.top>window.innerHeight){m.style.display='none';el.classList.remove('menu-open');return}const mr=m.getBoundingClientRect();let left=Math.min(Math.max(8,r.left),window.innerWidth-mr.width-8);let top=r.bottom+5;if(top+mr.height>window.innerHeight-8)top=Math.max(8,r.top-mr.height-5);m.style.left=left+'px';m.style.top=top+'px'}
+function repositionOpenMenu(){const el=document.querySelector('.worker.menu-open');if(el)positionMenu(el,el.querySelector('.magnet-menu'))}
+function askSupportDetails(key,w){const destination=prompt('Department / team to support:',supportDestinations[key]||'Replenishment');if(!destination||!destination.trim())return false;const existing=supportTimes[key]||{};const start=prompt('Support from (HH:MM):',existing.start||w.start);if(start===null)return false;const end=prompt('Support until (HH:MM):',existing.end||w.end);if(end===null)return false;if(!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(start||'')||!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(end||'')||timeMinutes(end)<=timeMinutes(start)){alert('Please use valid HH:MM support times, with end later than start.');return false}supportDestinations[key]=destination.trim();supportTimes[key]={start,end};return true}
+function uniqueId(prefix){return prefix+'-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6)}
+function findFlow(id){return boardFlows.find(g=>g.id===id)}
+function findAreaLocation(id){for(const flow of boardFlows){const index=flow.areas.findIndex(a=>a.id===id);if(index>=0)return{flow,index,area:flow.areas[index]}}return null}
+function addFlow(){const name=prompt('New flow name:');if(!name||!name.trim())return;boardFlows.push({id:uniqueId('flow'),group:name.trim(),areas:[]});setDirty();last('Flow added');render()}
+function renameFlow(id){const flow=findFlow(id);if(!flow)return;const name=prompt('Flow name:',flow.group);if(!name||!name.trim())return;flow.group=name.trim();setDirty();last('Flow renamed');render()}
+function addArea(id){const flow=findFlow(id);if(!flow)return;const name=prompt('New area name:');if(!name||!name.trim())return;flow.areas.push({id:uniqueId('area'),name:name.trim()});setDirty();last('Area added to '+flow.group);render()}
+function deleteFlow(id){const flow=findFlow(id);if(!flow||!confirm('Are you sure you want to delete '+flow.group+' flow?'))return;const ids=new Set(flow.areas.map(a=>a.id));Object.keys(assignments).forEach(key=>{if(ids.has(assignments[key]))assignments[key]='unassigned'});boardFlows=boardFlows.filter(g=>g.id!==id);unassignedCollapsed=false;setDirty();last('Flow deleted');render()}
+function renameArea(id){const loc=findAreaLocation(id);if(!loc)return;const name=prompt('Area name:',loc.area.name);if(!name||!name.trim())return;loc.area.name=name.trim();setDirty();last('Area renamed');render()}
+function deleteArea(id){const loc=findAreaLocation(id);if(!loc||!confirm('Are you sure you want to delete '+loc.area.name+' area?'))return;Object.keys(assignments).forEach(key=>{if(assignments[key]===id)assignments[key]='unassigned'});loc.flow.areas.splice(loc.index,1);unassignedCollapsed=false;setDirty();last('Area deleted');render()}
+function bind(){const ua=document.getElementById('unassigned');if(ua)ua.onclick=e=>{if(e.target.closest('.worker')||e.target.closest('button'))return;if(unassignedCollapsed){e.stopPropagation();unassignedCollapsed=false;render()}};const hideUnassigned=document.querySelector('[data-unassigned-hide]');if(hideUnassigned)hideUnassigned.onclick=e=>{e.preventDefault();e.stopPropagation();unassignedCollapsed=true;render()};document.querySelectorAll('[data-flow-action]').forEach(btn=>btn.onclick=e=>{e.preventDefault();e.stopPropagation();const id=btn.dataset.flowId;if(btn.dataset.flowAction==='rename')renameFlow(id);else if(btn.dataset.flowAction==='add-area')addArea(id);else if(btn.dataset.flowAction==='delete')deleteFlow(id)});document.querySelectorAll('[data-area-action]').forEach(btn=>btn.onclick=e=>{e.preventDefault();e.stopPropagation();if(btn.dataset.areaAction==='rename')renameArea(btn.dataset.areaId);else if(btn.dataset.areaAction==='delete')deleteArea(btn.dataset.areaId)});document.querySelectorAll('.flow[draggable="true"]').forEach(flow=>{flow.addEventListener('dragstart',e=>{if(e.target.closest('.worker')||e.target.closest('button')){e.preventDefault();return}draggedFlowId=flow.dataset.flowId;flow.classList.add('dragging');e.dataTransfer.setData('application/x-timeplan-flow',draggedFlowId);e.dataTransfer.effectAllowed='move'});flow.addEventListener('dragend',()=>{draggedFlowId=null;flow.classList.remove('dragging');document.querySelectorAll('.flow').forEach(f=>f.classList.remove('flow-drop-before','flow-drop-after'))});flow.addEventListener('dragover',e=>{if(!draggedFlowId||draggedFlowId===flow.dataset.flowId)return;e.preventDefault();const before=e.clientX<flow.getBoundingClientRect().left+flow.getBoundingClientRect().width/2;flow.classList.toggle('flow-drop-before',before);flow.classList.toggle('flow-drop-after',!before)});flow.addEventListener('dragleave',()=>flow.classList.remove('flow-drop-before','flow-drop-after'));flow.addEventListener('drop',e=>{if(!draggedFlowId||draggedFlowId===flow.dataset.flowId)return;e.preventDefault();e.stopPropagation();const from=boardFlows.findIndex(g=>g.id===draggedFlowId),to=boardFlows.findIndex(g=>g.id===flow.dataset.flowId);if(from<0||to<0)return;const before=e.clientX<flow.getBoundingClientRect().left+flow.getBoundingClientRect().width/2;const moved=boardFlows.splice(from,1)[0];let target=boardFlows.findIndex(g=>g.id===flow.dataset.flowId);if(!before)target++;boardFlows.splice(target,0,moved);setDirty();last('Flow order updated');render()})});document.querySelectorAll('.worker').forEach(el=>{const key=el.dataset.workerKey;if(boardEditMode){el.setAttribute('draggable','false');return;}const shortcut=el.querySelector('[data-break-shortcut]');if(shortcut)shortcut.onclick=e=>{e.preventDefault();e.stopPropagation();const w=DATA.workers.find(x=>x.key===key);if(w&&editBreak(key,w)){setDirty();last('Break updated');render()}};el.addEventListener('click',e=>{if(e.target.closest('.magnet-menu button')||e.target.closest('[data-break-shortcut]'))return;e.stopPropagation();el.classList.remove('magnet-clicked');void el.offsetWidth;el.classList.add('magnet-clicked');setTimeout(()=>el.classList.remove('magnet-clicked'),190);document.querySelectorAll('.worker.menu-open').forEach(w=>{if(w!==el)w.classList.remove('menu-open')});document.querySelectorAll('.magnet-menu').forEach(m=>{if(m!==el.querySelector('.magnet-menu'))m.style.display='none'});const m=el.querySelector('.magnet-menu');const opening=m.style.display!=='block';if(!opening){m.style.display='none';el.classList.remove('menu-open');return}el.classList.add('menu-open');m.style.display='block';positionMenu(el,m)});if(el.getAttribute('draggable')==='true'){el.addEventListener('dragstart',e=>{e.stopPropagation();draggedKey=key;e.dataTransfer.setData('text/plain',key);el.style.opacity='.45'});el.addEventListener('dragend',()=>{draggedKey=null;el.style.opacity=''})}el.querySelectorAll('.magnet-menu button').forEach(btn=>btn.onclick=e=>{e.stopPropagation();const w=DATA.workers.find(x=>x.key===key);if(!w)return;if(btn.dataset.action==='break'){if(!editBreak(key,w))return;setDirty();last('Break updated');render()}else if(btn.dataset.action==='break-available'){if(breaks[key])breaks[key].dismissed=true;setDirty();last('Coworker marked available from break');render()}else if(btn.dataset.action==='remove-break'){delete breaks[key];setDirty();last('Break removed');render()}else if(btn.dataset.action==='support'){if(!askSupportDetails(key,w))return;assignments[key]='support';setDirty();last('Assigned to support '+supportDestinations[key]);render()}else if(btn.dataset.action==='edit-support'){if(!askSupportDetails(key,w))return;setDirty();last('Support details updated');render()}else if(btn.dataset.action==='presence'){notPresent[key]=!notPresent[key];if(notPresent[key])assignments[key]='unassigned';else delete notPresent[key];setDirty();last(notPresent[key]?'Marked as absent':'Marked as available');render()}else if(btn.dataset.action==='time'){const start=prompt('Board shift start (HH:MM):',w.start);if(start===null)return;const end=prompt('Board shift end (HH:MM):',w.end);if(end===null)return;if(!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(start||'')||!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(end||'')||timeMinutes(end)<=timeMinutes(start))return alert('Please use valid HH:MM times, with end later than start.');w.start=start;w.end=end;w.effectiveStart=start;if(w.isExternal)syncExternalWorkers();else workerOverrides[key]={start,end,effectiveStart:start};setDirty();last('Board time adjusted');render()}else if(btn.dataset.action==='restore-time'&&!w.isExternal){const o=ORIGINAL_WORKERS.get(key);if(o){w.start=o.start;w.end=o.end;w.effectiveStart=o.effectiveStart;delete workerOverrides[key];setDirty();last('TimePlan time restored');render()}}else if(btn.dataset.action==='edit'&&w.isExternal){const name=prompt('External coworker name:',w.name);if(!name)return;const start=prompt('Shift start (HH:MM):',w.start);const end=prompt('Shift end (HH:MM):',w.end);if(!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(start||'')||!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(end||'')||timeMinutes(end)<=timeMinutes(start))return alert('Please use valid HH:MM times, with end later than start.');w.name=name.trim();w.start=start;w.end=end;w.effectiveStart=start;syncExternalWorkers();setDirty();last('External help updated');render()}else if(btn.dataset.action==='remove'&&w.isExternal){const isQuick=String(w.key).startsWith('external|kraft|');if(isQuick||confirm('Remove '+w.name+'?')){const i=DATA.workers.findIndex(x=>x.key===key);if(i>=0)DATA.workers.splice(i,1);delete assignments[key];delete notPresent[key];delete supportDestinations[key];delete supportTimes[key];delete breaks[key];syncExternalWorkers();setDirty();last('External help removed');render()}}})});if(!boardEditMode)document.querySelectorAll('.dropzone').forEach(z=>{let dragDepth=0;z.addEventListener('dragenter',e=>{if(draggedFlowId)return;e.preventDefault();dragDepth++;z.classList.add('drop-active')});z.addEventListener('dragover',e=>{if(draggedFlowId)return;e.preventDefault();if(e.dataTransfer)e.dataTransfer.dropEffect='move';z.classList.add('drop-active')});z.addEventListener('dragleave',e=>{dragDepth=Math.max(0,dragDepth-1);if(dragDepth===0)z.classList.remove('drop-active')});z.addEventListener('drop',e=>{if(draggedFlowId)return;e.preventDefault();e.stopPropagation();dragDepth=0;z.classList.remove('drop-active');const key=e.dataTransfer.getData('text/plain')||draggedKey;if(!key||notPresent[key])return;if(z.dataset.areaId==='support'){const w=DATA.workers.find(x=>x.key===key);if(!w||!askSupportDetails(key,w))return}else{delete supportDestinations[key];delete supportTimes[key]}assignments[key]=z.dataset.areaId;setDirty();last(z.dataset.areaId==='support'?'Assigned to support '+supportDestinations[key]:'Moved to '+z.dataset.areaId);render()})})}
+function addExternal(){const name=prompt('External coworker name:');if(!name)return;const start=prompt('Shift start (HH:MM):','08:00');const end=prompt('Shift end (HH:MM):','16:00');if(!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(start||'')||!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(end||'')||timeMinutes(end)<=timeMinutes(start))return alert('Please use valid HH:MM times, with end later than start.');const key='external|'+Date.now()+'-'+Math.random().toString(36).slice(2,7);DATA.workers.push({key,name:name.trim(),employeeId:'EXT',isExternal:true,start,end,effectiveStart:start,absences:[],badges:[],functionNames:[],functionBar:'#777777'});assignments[key]='unassigned';syncExternalWorkers();unassignedCollapsed=false;setDirty();last('External help added');render()}
+function addQuickKraftsamla(){const quickCount=DATA.workers.filter(w=>w.isExternal&&String(w.key).startsWith('external|kraft|')).length;if(quickCount>0&&quickCount%10===0&&!confirm('You already created '+quickCount+' Quick KRAFTSAMLA coworkers. Do you want to keep creating?'))return;let n=1;const used=new Set(DATA.workers.filter(w=>w.isExternal).map(w=>w.name));while(used.has('EXT HELP '+n))n++;const now=new Date();const start=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');let end='23:00';if(timeMinutes(start)>=timeMinutes(end))end='23:59';const key='external|kraft|'+Date.now()+'-'+Math.random().toString(36).slice(2,7);DATA.workers.push({key,name:'EXT HELP '+n,employeeId:'EXT',isExternal:true,start,end,effectiveStart:start,absences:[],badges:[],functionNames:[],functionBar:'#777777'});assignments[key]='unassigned';syncExternalWorkers();unassignedCollapsed=false;setDirty();last('Quick KRAFTSAMLA help added');render()}
+function resetBoard(){if(!confirm('Reset the board? Assignments, absences, breaks, manual time changes, external help, handover notes and custom flow/area changes will be cleared.'))return;assignments={};notPresent={};supportDestinations={};supportTimes={};breaks={};workerOverrides={};handoverNotes='';boardFlows=DATA.areas.map(g=>({id:g.id,group:g.group,areas:(g.areas||[]).map(a=>({...a}))}));for(const [key,o] of ORIGINAL_WORKERS.entries()){const w=DATA.workers.find(x=>x.key===key);if(w){w.start=o.start;w.end=o.end;w.effectiveStart=o.effectiveStart}}for(let i=DATA.workers.length-1;i>=0;i--)if(DATA.workers[i].isExternal)DATA.workers.splice(i,1);externalWorkers=[];unassignedCollapsed=false;setDirty();last('Board reset');render()}
+function currentPortableHTML(){syncExternalWorkers();document.getElementById('tp-state').textContent=JSON.stringify({assignments,notPresent,supportDestinations,supportTimes,breaks,boardFlows,handoverNotes,externalWorkers,workerOverrides,lastUpdated});return '<!DOCTYPE html>\\n'+document.documentElement.outerHTML}
+function boardShareStamp(){const now=new Date();const hh=String(now.getHours()).padStart(2,'0');const mm=String(now.getMinutes()).padStart(2,'0');return {time:hh+':'+mm,date:DATA.formattedDate||DATA.date}}
+function saveHTML(){const html=currentPortableHTML();const now=new Date();const stamp=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0')+'-'+String(now.getHours()).padStart(2,'0')+'-'+String(now.getMinutes()).padStart(2,'0');const blob=new Blob([html],{type:'text/html;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='TimePlan-Handover-'+stamp+'.html';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);setDirty(false);document.getElementById('lastChange').textContent='Handover saved '+stamp;refreshHeaderTimes()}
+async function quickShare(){saveHTML()}
+function preparePrintLayout(){document.querySelectorAll('.print-hidden').forEach(el=>el.classList.remove('print-hidden'));if(workersFor('unassigned').length===0)document.getElementById('unassignedWrapper').classList.add('print-hidden');if(workersFor('leadership').length===0)document.getElementById('leadership').classList.add('print-hidden');const supportEl=document.getElementById('support');if(supportEl&&workersFor('support').length===0)supportEl.classList.add('print-hidden');document.querySelectorAll('#board .flow').forEach((flow,index)=>{let visible=0;flow.querySelectorAll('.dropzone').forEach(zone=>{const count=workersFor(zone.dataset.areaId).length;if(count===0)zone.classList.add('print-hidden');else visible+=count});if(visible===0)flow.classList.add('print-hidden')});const visibleFlows=[...document.querySelectorAll('#board .flow')].filter(el=>!el.classList.contains('print-hidden')).length;document.documentElement.style.setProperty('--print-columns',String(Math.max(1,Math.min(3,visibleFlows||1))))}
+function cleanupPrintLayout(){document.querySelectorAll('.print-hidden').forEach(el=>el.classList.remove('print-hidden'));document.documentElement.style.removeProperty('--print-columns')}
+function exportPDF(){preparePrintLayout();setTimeout(()=>window.print(),30)}
+const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=document.getElementById('basicPlanMenu'),shareButton=document.getElementById('shareButton'),shareMenu=document.getElementById('shareMenu');basicPlanButton.onclick=e=>{e.stopPropagation();shareMenu.style.display='none';basicPlanMenu.style.display=basicPlanMenu.style.display==='block'?'none':'block'};document.querySelectorAll('.basic-plan-choice').forEach(b=>b.onclick=e=>{e.stopPropagation();basicPlanMenu.style.display='none';applyBasicPlan(b.dataset.mode)});document.getElementById('externalButton').onclick=addExternal;document.getElementById('kraftButton').onclick=addQuickKraftsamla;const editFlowsButton=document.getElementById('editFlowsButton'),addFlowButton=document.getElementById('addFlowButton');editFlowsButton.onclick=()=>{boardEditMode=!boardEditMode;document.querySelectorAll('[data-board-operation]').forEach(b=>{b.disabled=boardEditMode;b.style.opacity=boardEditMode?'.45':'1';b.style.cursor=boardEditMode?'not-allowed':''});editFlowsButton.textContent=boardEditMode?'Done Editing':'Edit Flows';editFlowsButton.style.background=boardEditMode?'#2E7D32':'white';editFlowsButton.style.borderColor=boardEditMode?'#2E7D32':'#AAA';editFlowsButton.style.color=boardEditMode?'white':'#333';addFlowButton.style.display=boardEditMode?'inline-block':'none';addFlowButton.style.background=boardEditMode?'#EAF3FA':'white';addFlowButton.style.borderColor=boardEditMode?'#8EBFE3':'#AAA';addFlowButton.style.color=boardEditMode?'#0058A3':'#333';last(boardEditMode?'Flow editing mode — finish editing to operate the board':'Flow editing finished');render()};addFlowButton.onclick=addFlow;shareButton.onclick=e=>{e.stopPropagation();basicPlanMenu.style.display='none';shareMenu.style.display=shareMenu.style.display==='block'?'none':'block'};shareMenu.onclick=e=>e.stopPropagation();shareMenu.querySelector('[data-share="quick"]').onclick=()=>{shareMenu.style.display='none';saveHTML()};shareMenu.querySelector('[data-share="pdf"]').onclick=()=>{shareMenu.style.display='none';exportPDF()};document.getElementById('resetButton').onclick=resetBoard;const reminder=document.getElementById('handoverReminder');document.getElementById('handoverNotNow').onclick=()=>reminder.classList.remove('show');document.getElementById('handoverSaveNow').onclick=()=>{reminder.classList.remove('show');saveHTML()};document.addEventListener('click',()=>{basicPlanMenu.style.display='none';shareMenu.style.display='none';document.querySelectorAll('.magnet-menu').forEach(m=>m.style.display='none');document.querySelectorAll('.worker.menu-open').forEach(w=>w.classList.remove('menu-open'))});window.addEventListener('beforeunload',e=>{if(!dirty)return;e.preventDefault();e.returnValue=''});window.addEventListener('beforeprint',preparePrintLayout);window.addEventListener('afterprint',cleanupPrintLayout);window.addEventListener('resize',()=>{requestAnimationFrame(updateSticky);requestAnimationFrame(repositionOpenMenu)});window.addEventListener('scroll',()=>{requestAnimationFrame(repositionOpenMenu)},true);setInterval(refreshHeaderTimes,1000);setInterval(()=>{const now=new Date();if(DATA.date===localISODate()&&!handoverReminderShown&&now.getHours()===13&&now.getMinutes()>=50&&now.getMinutes()<55){handoverReminderShown=true;reminder.classList.add('show')}if(!document.querySelector('.magnet-menu[style*="block"]'))render()},60000);render();
+<\/script>
+</body>
+</html>`;
+    }
+
+    async function openInteractiveBoard() {
+        if (!isBoardDepartment()) return;
+        const newWindow = window.open('', '_blank', 'width=1500,height=950');
+        if (!newWindow) return alert('The browser blocked the new tab/window.');
+        newWindow.document.write('<p style="font-family:Arial;padding:24px">Preparing portable Interactive Board...</p>');
+        const html = await buildInteractiveBoardHTML();
+        newWindow.document.open();
+        newWindow.document.write(html);
+        newWindow.document.close();
+    }
+
+    async function downloadInteractiveHTML() {
+        if (!isBoardDepartment()) return;
+        const html = await buildInteractiveBoardHTML();
+        downloadBlob(new Blob([html], { type: 'text/html;charset=utf-8' }), `TimePlan-Interactive-Board-${BOARD_DEPARTMENT_CODE}-${selectedDate}.html`);
+    }
+
+    // ---------- Export menu ----------
+
+    function createExportMenu() {
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'position:relative;display:inline-block;';
+        const button = document.createElement('button');
+        button.textContent = 'Export';
+        button.style.cssText = `font-family:${TOOL_FONT};background:${TP_BLUE};border:2px solid ${TP_BLUE};color:white;border-radius:7px;padding:9px 14px;font-size:13px;font-weight:800;cursor:pointer;`;
+        const menu = document.createElement('div');
+        menu.style.cssText = 'display:none;position:absolute;right:0;top:calc(100% + 5px);min-width:245px;background:white;border:1px solid #ccc;border-radius:7px;box-shadow:0 5px 15px rgba(0,0,0,.18);overflow:hidden;z-index:100000;';
+
+        [
+            ['Open Interactive Board', openInteractiveBoard],
+            ['Download Interactive HTML', downloadInteractiveHTML],
+            ['Export as PDF', exportBoardToPDF],
+            ['Export as CSV', exportBoardToCSV]
+        ].forEach(([label, action], index) => {
+            const item = document.createElement('button');
+            item.textContent = label;
+            item.style.cssText = `display:block;width:100%;font-family:${TOOL_FONT};text-align:left;border:none;border-top:${index ? '1px solid #eee' : 'none'};background:white;padding:11px 13px;color:#222;font-size:13px;font-weight:700;cursor:pointer;`;
+            item.onmouseenter = () => item.style.background = '#f4f4f4';
+            item.onmouseleave = () => item.style.background = '#fff';
+            item.onclick = () => { menu.style.display = 'none'; action(); };
+            menu.appendChild(item);
+        });
+
+        button.onclick = event => {
+            event.stopPropagation();
+            menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+        };
+        menu.onclick = event => event.stopPropagation();
+        document.addEventListener('click', () => menu.style.display = 'none');
+        wrapper.append(button, menu);
+        return wrapper;
+    }
+
+    // ---------- Board Planning ----------
+
+    function renderBoardPlanning(panel) {
+        if (!isBoardDepartment()) { activeView = 'sorted'; return renderPanel(); }
+
+        // Required for the Unassigned area to remain sticky against the viewport.
+        // The Board already becomes one column on narrower screens.
+        panel.style.overflow = 'visible';
+
+        const workers = currentDays[selectedDate];
+        if (!workers?.length) return;
+        renderDayHeader(panel, workers);
+        const byArea = buildWorkersByArea(workers);
+
+        const toolbar = document.createElement('div');
+        toolbar.style.cssText = 'display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;';
+        toolbar.innerHTML = `<div><div style="font-size:18px;font-weight:800;">Daily Board Planning</div><div style="font-size:12px;color:#777;margin-top:3px;">Department ${BOARD_DEPARTMENT_CODE}</div></div>`;
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;';
+        actions.appendChild(createBasicPlanMenu());
+        const externalHelp = document.createElement('button');
+        externalHelp.textContent = '+ External Help';
+        externalHelp.style.cssText = `font-family:${TOOL_FONT};background:white;border:1px solid #777;color:#333;border-radius:7px;padding:9px 14px;font-size:13px;font-weight:800;cursor:pointer;`;
+        externalHelp.onclick = addExternalHelp;
+        actions.appendChild(externalHelp);
+        actions.appendChild(createExportMenu());
+        const reset = document.createElement('button');
+        reset.textContent = 'Reset Board';
+        reset.style.cssText = `font-family:${TOOL_FONT};background:white;border:1px solid #999;color:#444;border-radius:7px;padding:9px 14px;font-size:13px;font-weight:700;cursor:pointer;`;
+        reset.onclick = () => { if (confirm('Reset assignments, not-present marks and external help?')) resetBoard(); };
+        actions.appendChild(reset);
+        toolbar.appendChild(actions);
+        panel.appendChild(toolbar);
+
+        const unassigned = document.createElement('div');
+        unassigned.id = 'tp-sticky-unassigned';
+
+        const hasPendingUnassigned = byArea.unassigned.length > 0;
+        if (!hasPendingUnassigned) unassignedCollapsedByDate[selectedDate] = true;
+        const unassignedCollapsed = unassignedCollapsedByDate[selectedDate] === true;
+
+        unassigned.style.cssText = `
+            position:sticky;
+            top:8px;
+            z-index:60;
+            margin-bottom:14px;
+            padding:4px 0;
+            background:white;
+            border-radius:9px;
+            box-shadow:0 8px 16px -15px rgba(0,0,0,.65);
+            max-height:${unassignedCollapsed ? 'none' : '38vh'};
+            overflow-y:${unassignedCollapsed ? 'visible' : 'auto'};
+            overscroll-behavior:contain;
+        `;
+
+        if (unassignedCollapsed) {
+            const compact = document.createElement('div');
+            compact.dataset.areaId = 'unassigned';
+            compact.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 11px;border:2px dashed #aaa;border-radius:8px;background:#fafafa;font-size:13px;font-weight:800;';
+            compact.innerHTML = `<div style="display:flex;align-items:center;gap:8px;"><span>UNASSIGNED</span><span style="display:inline-flex;align-items:center;justify-content:center;min-width:23px;height:23px;padding:0 6px;border-radius:999px;background:#e6e6e6;color:#333;font-size:12px;">${byArea.unassigned.length}</span><span style="color:#777;font-size:11px;font-weight:700;">${byArea.unassigned.length === 1 ? '1 remaining' : `${byArea.unassigned.length} remaining`}</span></div>`;
+            const showButton = document.createElement('button');
+            showButton.textContent = 'Show';
+            showButton.style.cssText = `font-family:${TOOL_FONT};background:white;border:1px solid #aaa;color:#444;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:800;cursor:pointer;`;
+            showButton.onclick = event => { event.stopPropagation(); unassignedCollapsedByDate[selectedDate] = false; renderPanel(); };
+            compact.appendChild(showButton);
+            compact.addEventListener('dragover', event => { event.preventDefault(); compact.style.borderColor = TP_BLUE; compact.style.background = 'rgba(0,88,163,.10)'; });
+            compact.addEventListener('dragleave', () => { compact.style.borderColor = '#aaa'; compact.style.background = '#fafafa'; });
+            compact.addEventListener('drop', event => {
+                event.preventDefault();
+                const key = event.dataTransfer.getData('text/plain') || draggedWorkerKey;
+                if (!key) return;
+                assignWorker(key, 'unassigned');
+                renderPanel();
+            });
+            unassigned.appendChild(compact);
+        } else {
+            const unassignedZone = createDropZone('unassigned', 'UNASSIGNED', byArea.unassigned);
+            const zoneHeader = unassignedZone.firstElementChild;
+            if (zoneHeader) {
+                const hideButton = document.createElement('button');
+                hideButton.textContent = 'Hide';
+                hideButton.style.cssText = `font-family:${TOOL_FONT};margin-left:auto;margin-right:7px;background:white;border:1px solid #aaa;color:#444;border-radius:6px;padding:4px 9px;font-size:10px;font-weight:800;cursor:pointer;`;
+                hideButton.onclick = event => { event.stopPropagation(); unassignedCollapsedByDate[selectedDate] = true; renderPanel(); };
+                zoneHeader.insertBefore(hideButton, zoneHeader.lastElementChild);
+            }
+            unassigned.appendChild(unassignedZone);
+        }
+        panel.appendChild(unassigned);
+
+        const leadership = document.createElement('div');
+        leadership.style.marginBottom = '18px';
+        leadership.appendChild(createDropZone('leadership', 'ORDER AUDITOR - COORDINATOR', byArea.leadership));
+        panel.appendChild(leadership);
+
+        const grid = document.createElement('div');
+        grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,minmax(300px,1fr));gap:14px;align-items:start;--tp-flow-sticky-top:8px;';
+
+        const updateFlowStickyTop = () => {
+            const top = Math.ceil(unassigned.getBoundingClientRect().height) + 16;
+            grid.style.setProperty('--tp-flow-sticky-top', `${top}px`);
+        };
+
+        BOARD_AREAS.forEach(group => {
+            const column = document.createElement('div');
+            column.style.cssText = 'border:1px solid #d5d5d5;border-radius:9px;background:#fff;overflow:visible;';
+            const count = group.areas.reduce((total, area) => total + byArea[area.id].filter(worker => !isWorkerNotPresent(worker)).length, 0);
+            column.innerHTML = `<div style="position:sticky;top:var(--tp-flow-sticky-top,8px);z-index:45;display:flex;justify-content:space-between;align-items:center;padding:12px 13px;background:rgba(0,88,163,.93);color:white;font-size:15px;font-weight:800;border-radius:8px 8px 0 0;box-shadow:0 6px 12px -12px rgba(0,0,0,.8);"><span>${escapeHTML(group.group)}</span><span style="display:inline-flex;align-items:center;justify-content:center;min-width:27px;height:27px;padding:0 7px;border-radius:999px;background:white;color:${TP_BLUE};font-size:12px;">${count}</span></div>`;
+            const areaContainer = document.createElement('div');
+            areaContainer.style.cssText = 'display:flex;flex-direction:column;gap:10px;padding:10px;';
+            group.areas.forEach(area => areaContainer.appendChild(createDropZone(area.id, area.name, byArea[area.id])));
+            column.appendChild(areaContainer);
+            grid.appendChild(column);
+        });
+        panel.appendChild(grid);
+        updateFlowStickyTop();
+        requestAnimationFrame(updateFlowStickyTop);
+        if (window.innerWidth < 1050) grid.style.gridTemplateColumns = '1fr';
+    }
+
+    // ---------- CSV ----------
+
+    function csvEscape(value) {
+        const text = String(value ?? '');
+        return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+    }
+
+    function exportBoardToCSV() {
+        const workers = getBoardWorkersForSelectedDate();
+        if (!workers?.length) return;
+        const headers = ['Date', 'Coworker', 'Employee ID', 'Start', 'End', 'Flow', 'Area', 'Status', 'Badges', 'Functions'];
+        const rows = sortWorkersByStart(workers).map(worker => {
+            const area = findAreaInfo(getWorkerAssignment(worker));
+            return [selectedDate, worker.name, worker.employeeId, formatTime(worker.start), formatTime(worker.end), area.flow, area.area, isWorkerNotPresent(worker) ? 'Not Present' : (worker.isExternal ? 'External Help' : 'Present'), getCapabilityLabels(worker).join('|'), getFunctionNames(worker).join('|')];
+        });
+        const csv = [headers, ...rows].map(row => row.map(csvEscape).join(',')).join('\r\n');
+        downloadBlob(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }), `TimePlan-Board-${BOARD_DEPARTMENT_CODE}-${selectedDate}.csv`);
+    }
+
+    function downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    // ---------- Main Board PDF ----------
+
+    function renderPDFWorker(worker) {
+        return `<div class="worker"><span class="worker-bar" style="background:${getFunctionBarBackground(worker)};"></span><div class="worker-name">${escapeHTML(worker.name)} ${renderCapabilityBadges(worker, true)}</div><div class="worker-time"><strong>${formatTime(worker.start)}</strong><span> &rarr; ${formatTime(worker.end)}</span></div>${renderAbsenceIndicator(worker, true)}</div>`;
+    }
+
+    function renderPDFArea(name, workers) {
+        return `<div class="area"><div class="area-title"><span>${escapeHTML(name)}</span><span>${workers.length}</span></div><div class="area-workers">${workers.length ? sortWorkersByStart(workers).map(renderPDFWorker).join('') : '-'}</div></div>`;
+    }
+
+    function exportBoardToPDF() {
+        const workers = currentDays[selectedDate];
+        if (!workers?.length) return;
+        const byArea = buildWorkersByArea(workers);
+        const popup = window.open('', '_blank', 'width=1400,height=900');
+        if (!popup) return alert('The browser blocked the print window.');
+        const columns = BOARD_AREAS.map(group => `<section class="flow"><div class="flow-header">${escapeHTML(group.group)}</div>${group.areas.map(area => renderPDFArea(area.name, byArea[area.id])).join('')}</section>`).join('');
+
+        popup.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+*{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}@page{size:A4 landscape;margin:9mm}body{margin:0;font-family:${TOOL_FONT};color:#222}.header{display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:10px;margin-bottom:10px;border-bottom:4px solid ${TP_BLUE}}.title{color:${TP_BLUE};font-size:24px;font-weight:800}.date{margin-top:4px;font-size:16px;font-weight:700}.meta{text-align:right;color:#555;font-size:11px}.leadership{margin-bottom:9px}.board{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.flow{border:1px solid #CCC;border-radius:7px;overflow:hidden}.flow-header{padding:8px 10px;background:${TP_BLUE}!important;color:white!important;font-size:14px;font-weight:800}.area{margin:6px;padding:6px;background:#F7F7F7!important;border:1px solid #DDD;border-radius:6px}.area-title{display:flex;justify-content:space-between;margin-bottom:5px;font-size:11px;font-weight:800;text-transform:uppercase}.area-workers{display:flex;flex-wrap:wrap;gap:4px;font-size:10px}.worker{position:relative;overflow:hidden;min-width:110px;max-width:160px;padding:5px 6px 5px 10px;background:white!important;border:1px solid #CCC;border-radius:5px}.worker-bar{position:absolute;left:0;top:0;bottom:0;width:4px}.worker-name{display:flex;flex-wrap:wrap;align-items:center;gap:3px;font-weight:800}.worker-time{margin-top:2px;font-size:9px}.worker-time strong{color:#222;font-weight:900}.worker-time span{color:#666;font-weight:700}
+</style></head><body><div class="header"><div><div class="title">DAILY BOARD PLAN</div><div class="date">${escapeHTML(formatDate(workers[0].start))}</div></div><div class="meta">${getUniqueCoworkerCount(workers)} coworkers<br>Department ${BOARD_DEPARTMENT_CODE}<br>Generated ${formatGeneratedTime()}</div></div><div class="leadership">${renderPDFArea('ORDER AUDITOR - COORDINATOR', byArea.leadership)}</div><div class="board">${columns}</div>${byArea.unassigned.length ? renderPDFArea('UNASSIGNED', byArea.unassigned) : ''}</body></html>`);
+        popup.document.close();
+        setTimeout(() => popup.print(), 400);
+    }
+
+    // ---------- Panel ----------
+
+    function renderPanel() {
+        document.getElementById(PANEL_ID)?.remove();
+        const dates = Object.keys(currentDays).sort();
+        if (!dates.length) return;
+        if (!selectedDate || !currentDays[selectedDate]) selectedDate = dates[0];
+        activeView = 'sorted';
+
+        const panel = document.createElement('div');
+        panel.id = PANEL_ID;
+        panel.style.cssText = `position:relative;margin:18px 24px;padding:20px;background:white;border:2px solid ${TP_BLUE};border-radius:8px;box-shadow:0 3px 14px rgba(0,0,0,.18);font-family:${TOOL_FONT};z-index:9999;color:#222;overflow-x:auto;`;
+        const top = document.createElement('div');
+        top.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
+        top.innerHTML = `<div><div style="font-size:22px;font-weight:800;color:${TP_BLUE};">TimePlan Tools</div><div style="font-size:13px;color:#666;margin-top:3px;">Department Plan</div></div>`;
+        const close = document.createElement('button');
+        close.textContent = 'Close';
+        close.style.cssText = `font-family:${TOOL_FONT};border:none;background:#eee;border-radius:5px;padding:8px 12px;cursor:pointer;`;
+        close.onclick = () => { panel.remove(); updateButtonState(); };
+        top.appendChild(close);
+        panel.appendChild(top);
+        renderDayButtons(panel);
+        renderViewTabs(panel);
+        // Keep TimePlan Tools focused on the roster. The operational board
+        // opens in its own Interactive Board tab via Go to Board Planning.
+        renderSortedView(panel);
+        document.body.insertBefore(panel, document.body.firstChild);
+        updateButtonState();
+    }
+
+    function updateButtonState() {
+        const button = document.getElementById(BUTTON_ID);
+        if (!button) return;
+        button.textContent = document.getElementById(PANEL_ID) ? 'Close TimePlan Tools' : 'TimePlan Tools';
+    }
+
+    async function loadTimePlanTools() {
+        const existing = document.getElementById(PANEL_ID);
+        if (existing) { existing.remove(); updateButtonState(); return; }
+        const button = document.getElementById(BUTTON_ID);
+        try {
+            button.disabled = true;
+            button.textContent = 'Loading...';
+            const worktimesUrl = findDepartmentWorktimesUrl();
+            if (!worktimesUrl) { alert('Open Department Plan and refresh once.'); return; }
+            const [worktimesJSON, absenceJSON, settingsJSON] = await Promise.all([
+                getJSON(worktimesUrl),
+                getJSON(findDepartmentAbsenceUrl() || buildAbsenceUrl(worktimesUrl)),
+                getJSON(findLoadSettingUrl() || buildLoadSettingUrl())
+            ]);
+            const employees = normalizeWorktimesResponse(worktimesJSON);
+            const rawAbsences = normalizeAbsenceResponse(absenceJSON);
+            const trainingActivities = rawAbsences.filter(isTrainingActivity);
+            const absences = buildUnavailableAbsences(rawAbsences);
+            const functionMap = buildFunctionMap(settingsJSON);
+            currentDays = buildDays(employees, absences, functionMap, trainingActivities);
+            const dates = Object.keys(currentDays).sort();
+            if (!dates.length) { alert('No scheduled coworkers found.'); return; }
+            if (!selectedDate || !currentDays[selectedDate]) selectedDate = dates[0];
+            renderPanel();
+        } catch (error) {
+            console.error(error);
+            alert('Could not open TimePlan Tools.\n\n' + error.message);
+        } finally {
+            button.disabled = false;
+            updateButtonState();
+        }
+    }
+
+    function updateFloatingButton() {
+        const existing = document.getElementById(BUTTON_ID);
+        if (!isDepartmentPlanPage()) {
+            existing?.remove();
+            document.getElementById(PANEL_ID)?.remove();
+            return;
+        }
+        if (existing) { updateButtonState(); return; }
+        const button = document.createElement('button');
+        button.id = BUTTON_ID;
+        button.textContent = 'TimePlan Tools';
+        button.style.cssText = `position:fixed;right:24px;bottom:24px;z-index:99999;font-family:${TOOL_FONT};background:${TP_BLUE};color:white;border:none;border-radius:9px;padding:16px 24px;font-size:16px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.28);`;
+        button.onclick = loadTimePlanTools;
+        document.body.appendChild(button);
+    }
+
+    // ---------- GitHub Pages standalone bridge ----------
+    function setStandaloneStatus(message, isError = false) {
+        const el = document.getElementById('tp-loader-status');
+        if (!el) return;
+        el.textContent = message;
+        el.style.color = isError ? '#B42318' : '#555';
+    }
+
+    function unwrapPayload(input) {
+        const root = input && typeof input === 'object' ? input : {};
+        const p = root.payload && typeof root.payload === 'object' ? root.payload : root;
+        return {
+            worktimes: p.worktimesJSON ?? p.worktimes ?? p.departmentWorktimes ?? p.DepartmentWorktimes ?? p.roster ?? null,
+            absences: p.absenceJSON ?? p.absencesJSON ?? p.absence ?? p.absences ?? p.departmentAbsence ?? p.DepartmentAbsence ?? null,
+            settings: p.settingsJSON ?? p.loadSettingJSON ?? p.settings ?? p.loadSetting ?? p.LoadSetting ?? null,
+            department: String(p.departmentId ?? p.department ?? p.deptId ?? p.dept_id ?? '')
+        };
+    }
+
+    function hasRosterPayload(p) {
+        return p.worktimes != null && p.absences != null && p.settings != null;
+    }
+
+    function loadStandalonePayload(input) {
+        const p = unwrapPayload(input);
+        if (!hasRosterPayload(p)) return false;
+        try {
+            const employees = normalizeWorktimesResponse(p.worktimes);
+            const rawAbsences = normalizeAbsenceResponse(p.absences);
+            const trainingActivities = rawAbsences.filter(isTrainingActivity);
+            const absences = buildUnavailableAbsences(rawAbsences);
+            const functionMap = buildFunctionMap(p.settings);
+            currentDays = buildDays(employees, absences, functionMap, trainingActivities);
+            const dates = Object.keys(currentDays).sort();
+            if (!dates.length) throw new Error('No scheduled coworkers found in the received roster.');
+            if (!selectedDate || !currentDays[selectedDate]) selectedDate = dates[0];
+            document.getElementById('tp-loader-card')?.remove();
+            document.body.style.margin = '0';
+            document.body.style.background = '#F3F4F5';
+            renderPanel();
+            return true;
+        } catch (error) {
+            console.error('TimePlan Tools standalone payload error:', error);
+            setStandaloneStatus('Could not process TimePlan roster: ' + (error?.message || error), true);
+            return true;
+        }
+    }
+
+    window.addEventListener('message', event => {
+        // The launcher runs on ikea.timeplan-software.net and sends the already-fetched JSON here.
+        if (event.origin !== 'https://ikea.timeplan-software.net' || event.source !== window.opener) return;
+        if (event.data?.type !== 'TIMEPLAN_TOOLS_DATA' && event.data?.type !== 'TIMEPLAN_TOOLS_REFRESHED') return;
+        loadStandalonePayload(event.data);
+    });
+
+    // Also accept a same-page test payload if one was placed before this script loaded.
+    if (window.__TIMEPLAN_TOOLS_PAYLOAD__) loadStandalonePayload(window.__TIMEPLAN_TOOLS_PAYLOAD__);
+    else setStandaloneStatus('Waiting for roster data from the TimePlan launcher…');
+})();
