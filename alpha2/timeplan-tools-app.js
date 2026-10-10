@@ -1860,6 +1860,10 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
         const p = unwrapPayload(input);
         if (!hasRosterPayload(p)) return false;
         try {
+            // Snapshot timestamp belongs to the launcher payload, not the roster APIs.
+            const rawCapturedAt = input?.capturedAt ?? input?.payload?.capturedAt;
+            snapshotCapturedAt = rawCapturedAt && !Number.isNaN(Date.parse(rawCapturedAt))
+                ? new Date(rawCapturedAt) : new Date();
             const employees = normalizeWorktimesResponse(p.worktimes);
             const rawAbsences = normalizeAbsenceResponse(p.absences);
             const trainingActivities = rawAbsences.filter(isTrainingActivity);
