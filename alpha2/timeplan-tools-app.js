@@ -1389,7 +1389,8 @@ ${rows}
             })),
             areas: BOARD_AREAS,
             assignments: { ...getAssignmentsForSelectedDate() },
-            notPresent: { ...getNotPresentForSelectedDate() }
+            notPresent: { ...getNotPresentForSelectedDate() },
+            snapshotCapturedAt: snapshotCapturedAt ? snapshotCapturedAt.toISOString() : null
         };
     }
 
@@ -1399,6 +1400,7 @@ ${rows}
             date: data.date,
             formattedDate: data.formattedDate,
             department: data.department,
+            snapshotCapturedAt: data.snapshotCapturedAt,
             fontFamily: data.fontFamily,
             fontFaceCSS: data.fontFaceCSS,
             workers: data.workers,
@@ -1419,7 +1421,7 @@ ${escapeStyleClose(data.fontFaceCSS)}
 </head>
 <body>
 <script id="tp-state" type="application/json">${stateJSON}</script>
-<div class="header"><div><div class="title">Daily Board Plan</div><div class="subtitle subtitle-line"><span id="dateLabel"></span><span class="header-sep">&middot;</span><span class="plan-updated" id="planUpdated"></span></div><div class="local-clock" id="localClock"></div><div class="meta">Department ${escapeHTML(data.department)}</div></div><div class="actions"><div style="position:relative"><button class="secondary" id="basicPlanButton" data-board-operation="1" style="border-color:${TP_BLUE};color:${TP_BLUE}">Create Basic Plan</button><div id="basicPlanMenu" style="display:none;position:absolute;right:0;top:calc(100% + 5px);min-width:245px;background:white;border:1px solid #CCC;border-radius:7px;box-shadow:0 5px 15px rgba(0,0,0,.18);overflow:hidden;z-index:100000"><button class="basic-plan-choice" data-mode="morning" style="display:block;width:100%;text-align:left;border:none;background:white;padding:10px 13px;color:#222"><strong>Morning Default</strong><span style="display:block;margin-top:2px;font-size:10px;color:#777">Morning team only - Unassigned coworkers</span></button><button class="basic-plan-choice" data-mode="evening" style="display:block;width:100%;text-align:left;border:none;border-top:1px solid #EEE;background:white;padding:10px 13px;color:#222"><strong>Evening Default</strong><span style="display:block;margin-top:2px;font-size:10px;color:#777">Evening team only - Unassigned coworkers</span></button></div></div><button class="secondary" id="externalButton" data-board-operation="1">+ External Help</button><button class="secondary" id="kraftButton" data-board-operation="1">+ Quick KRAFTSAMLA</button><button class="secondary" id="editFlowsButton">Edit Flows</button><button class="secondary" id="addFlowButton" style="display:none">+ Add Flow</button><div class="share-wrap"><button class="primary" id="shareButton" data-board-operation="1">Save Plan</button><div class="share-menu" id="shareMenu"><button data-share="quick" class="share-primary">Share Plan for HANDOVER</button><button data-share="pdf">Export PDF</button></div></div><button class="danger" id="resetButton" data-board-operation="1">Reset Board</button></div></div>
+<div class="header"><div><div class="title">Daily Board Plan</div><div class="subtitle subtitle-line"><span id="dateLabel"></span><span class="header-sep">&middot;</span><span class="plan-updated" id="planUpdated"></span></div><div class="local-clock" id="localClock"></div><div class="meta">${data.snapshotCapturedAt ? "Snapshot · " + escapeHTML(new Intl.DateTimeFormat("en-GB", {dateStyle:"medium",timeStyle:"short"}).format(new Date(data.snapshotCapturedAt))) + "<br>" : ""}Department ${escapeHTML(data.department)}</div></div><div class="actions"><div style="position:relative"><button class="secondary" id="basicPlanButton" data-board-operation="1" style="border-color:${TP_BLUE};color:${TP_BLUE}">Create Basic Plan</button><div id="basicPlanMenu" style="display:none;position:absolute;right:0;top:calc(100% + 5px);min-width:245px;background:white;border:1px solid #CCC;border-radius:7px;box-shadow:0 5px 15px rgba(0,0,0,.18);overflow:hidden;z-index:100000"><button class="basic-plan-choice" data-mode="morning" style="display:block;width:100%;text-align:left;border:none;background:white;padding:10px 13px;color:#222"><strong>Morning Default</strong><span style="display:block;margin-top:2px;font-size:10px;color:#777">Morning team only - Unassigned coworkers</span></button><button class="basic-plan-choice" data-mode="evening" style="display:block;width:100%;text-align:left;border:none;border-top:1px solid #EEE;background:white;padding:10px 13px;color:#222"><strong>Evening Default</strong><span style="display:block;margin-top:2px;font-size:10px;color:#777">Evening team only - Unassigned coworkers</span></button></div></div><button class="secondary" id="externalButton" data-board-operation="1">+ External Help</button><button class="secondary" id="kraftButton" data-board-operation="1">+ Quick KRAFTSAMLA</button><button class="secondary" id="editFlowsButton">Edit Flows</button><button class="secondary" id="addFlowButton" style="display:none">+ Add Flow</button><div class="share-wrap"><button class="primary" id="shareButton" data-board-operation="1">Save Plan</button><div class="share-menu" id="shareMenu"><button data-share="quick" class="share-primary">Share Plan for HANDOVER</button><button data-share="pdf">Export PDF</button></div></div><button class="danger" id="resetButton" data-board-operation="1">Reset Board</button></div></div>
 <div class="status"><span id="coworkerCount"></span><span id="lastChange"></span></div>
 <div id="unassignedWrapper"><div id="unassigned"></div></div><div id="leadership"></div><div id="board" class="board"></div><div id="handoverReminder" class="handover-reminder"><div class="handover-reminder-card"><div class="handover-reminder-title">Share handover now?</div><div class="handover-reminder-actions"><button class="secondary" id="handoverNotNow">Not now</button><button class="primary" id="handoverSaveNow">Save Plan</button></div></div></div>
 <script>
@@ -1802,7 +1804,7 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
             const trainingActivities = rawAbsences.filter(isTrainingActivity);
             const absences = buildUnavailableAbsences(rawAbsences);
             const functionMap = buildFunctionMap(settingsJSON);
-            snapshotCapturedAt = input?.capturedAt && !isNaN(Date.parse(input.capturedAt)) ? new Date(input.capturedAt) : new Date();
+            snapshotCapturedAt = new Date();
             currentDays = buildDays(employees, absences, functionMap, trainingActivities);
             const dates = Object.keys(currentDays).sort();
             if (!dates.length) { alert('No scheduled coworkers found.'); return; }
@@ -1834,6 +1836,21 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
     }
 
     // ---------- GitHub Pages standalone bridge ----------
+    const SNAPSHOT_STORAGE_KEY = "timeplan-tools-alpha2-roster-snapshot";
+    function saveSnapshot(input) {
+        try { sessionStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(input)); }
+        catch (error) { console.warn("Snapshot could not be saved for reload:", error); }
+    }
+    function restoreSnapshot() {
+        try {
+            const raw = sessionStorage.getItem(SNAPSHOT_STORAGE_KEY);
+            return raw ? loadStandalonePayload(JSON.parse(raw), false) : false;
+        } catch (error) {
+            console.warn("Saved snapshot could not be restored:", error);
+            try { sessionStorage.removeItem(SNAPSHOT_STORAGE_KEY); } catch {}
+            return false;
+        }
+    }
     function setStandaloneStatus(message, isError = false) {
         const el = document.getElementById('tp-loader-status');
         if (!el) return;
@@ -1856,7 +1873,7 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
         return p.worktimes != null && p.absences != null && p.settings != null;
     }
 
-    function loadStandalonePayload(input) {
+    function loadStandalonePayload(input, persist = true) {
         const p = unwrapPayload(input);
         if (!hasRosterPayload(p)) return false;
         try {
@@ -1877,6 +1894,7 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
             document.body.style.margin = '0';
             document.body.style.background = '#F3F4F5';
             renderPanel();
+            if (persist) saveSnapshot(input);
             return true;
         } catch (error) {
             console.error('TimePlan Tools standalone payload error:', error);
@@ -1894,5 +1912,5 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
 
     // Also accept a same-page test payload if one was placed before this script loaded.
     if (window.__TIMEPLAN_TOOLS_PAYLOAD__) loadStandalonePayload(window.__TIMEPLAN_TOOLS_PAYLOAD__);
-    else setStandaloneStatus('Waiting for roster data from the TimePlan launcher…');
+    else if (!restoreSnapshot()) setStandaloneStatus('Open Department Plan and launch TimePlan Tools from your Favorites bar.');
 })();
