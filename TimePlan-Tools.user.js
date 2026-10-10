@@ -1400,7 +1400,8 @@ ${rows}
             })),
             areas: BOARD_AREAS,
             assignments: { ...getAssignmentsForSelectedDate() },
-            notPresent: { ...getNotPresentForSelectedDate() }
+            notPresent: { ...getNotPresentForSelectedDate() },
+            snapshotCapturedAt: snapshotCapturedAt ? snapshotCapturedAt.toISOString() : null
         };
     }
 
@@ -1413,7 +1414,8 @@ ${rows}
             fontFamily: data.fontFamily,
             fontFaceCSS: data.fontFaceCSS,
             workers: data.workers,
-            areas: data.areas
+            areas: data.areas,
+            snapshotCapturedAt: data.snapshotCapturedAt
         });
         const stateJSON = safeJSONStringify({ assignments: data.assignments, notPresent: data.notPresent, supportDestinations: {}, supportTimes: {}, breaks: {}, boardFlows: data.areas, lastUpdated: new Date().toISOString() });
 
@@ -1430,7 +1432,7 @@ ${escapeStyleClose(data.fontFaceCSS)}
 </head>
 <body>
 <script id="tp-state" type="application/json">${stateJSON}</script>
-<div class="header"><div><div class="title">Daily Board Plan</div><div class="subtitle subtitle-line"><span id="dateLabel"></span><span class="header-sep">&middot;</span><span class="plan-updated" id="planUpdated"></span></div><div class="local-clock" id="localClock"></div><div class="meta">Department ${escapeHTML(data.department)}</div></div><div class="actions"><div style="position:relative"><button class="secondary" id="basicPlanButton" data-board-operation="1" style="border-color:${TP_BLUE};color:${TP_BLUE}">Create Basic Plan</button><div id="basicPlanMenu" style="display:none;position:absolute;right:0;top:calc(100% + 5px);min-width:245px;background:white;border:1px solid #CCC;border-radius:7px;box-shadow:0 5px 15px rgba(0,0,0,.18);overflow:hidden;z-index:100000"><button class="basic-plan-choice" data-mode="morning" style="display:block;width:100%;text-align:left;border:none;background:white;padding:10px 13px;color:#222"><strong>Morning Default</strong><span style="display:block;margin-top:2px;font-size:10px;color:#777">Morning team only - Unassigned coworkers</span></button><button class="basic-plan-choice" data-mode="evening" style="display:block;width:100%;text-align:left;border:none;border-top:1px solid #EEE;background:white;padding:10px 13px;color:#222"><strong>Evening Default</strong><span style="display:block;margin-top:2px;font-size:10px;color:#777">Evening team only - Unassigned coworkers</span></button></div></div><button class="secondary" id="externalButton" data-board-operation="1">+ External Help</button><button class="secondary" id="kraftButton" data-board-operation="1">+ Quick KRAFTSAMLA</button><button class="secondary" id="editFlowsButton">Edit Flows</button><button class="secondary" id="addFlowButton" style="display:none">+ Add Flow</button><div class="share-wrap"><button class="primary" id="shareButton" data-board-operation="1">Save Plan</button><div class="share-menu" id="shareMenu"><button data-share="quick" class="share-primary">Share Plan for HANDOVER</button><button data-share="pdf">Export PDF</button></div></div><button class="danger" id="resetButton" data-board-operation="1">Reset Board</button></div></div>
+<div class="header"><div><div class="title">Daily Board Plan</div>${data.snapshotCapturedAt ? `<div class="board-snapshot-stamp" style="margin-top:5px;color:#666;font-size:13px;font-weight:500;">Snapshot · ${escapeHTML(new Intl.DateTimeFormat("en-GB", {dateStyle:"medium",timeStyle:"short"}).format(new Date(data.snapshotCapturedAt)))}</div>` : ""}<div class="subtitle subtitle-line"><span id="dateLabel"></span><span class="header-sep">&middot;</span><span class="plan-updated" id="planUpdated"></span></div><div class="local-clock" id="localClock"></div><div class="meta">Department ${escapeHTML(data.department)}</div></div><div class="actions"><div style="position:relative"><button class="secondary" id="basicPlanButton" data-board-operation="1" style="border-color:${TP_BLUE};color:${TP_BLUE}">Create Basic Plan</button><div id="basicPlanMenu" style="display:none;position:absolute;right:0;top:calc(100% + 5px);min-width:245px;background:white;border:1px solid #CCC;border-radius:7px;box-shadow:0 5px 15px rgba(0,0,0,.18);overflow:hidden;z-index:100000"><button class="basic-plan-choice" data-mode="morning" style="display:block;width:100%;text-align:left;border:none;background:white;padding:10px 13px;color:#222"><strong>Morning Default</strong><span style="display:block;margin-top:2px;font-size:10px;color:#777">Morning team only - Unassigned coworkers</span></button><button class="basic-plan-choice" data-mode="evening" style="display:block;width:100%;text-align:left;border:none;border-top:1px solid #EEE;background:white;padding:10px 13px;color:#222"><strong>Evening Default</strong><span style="display:block;margin-top:2px;font-size:10px;color:#777">Evening team only - Unassigned coworkers</span></button></div></div><button class="secondary" id="externalButton" data-board-operation="1">+ External Help</button><button class="secondary" id="kraftButton" data-board-operation="1">+ Quick KRAFTSAMLA</button><button class="secondary" id="editFlowsButton">Edit Flows</button><button class="secondary" id="addFlowButton" style="display:none">+ Add Flow</button><div class="share-wrap"><button class="primary" id="shareButton" data-board-operation="1">Save Plan</button><div class="share-menu" id="shareMenu"><button data-share="quick" class="share-primary">Share Plan for HANDOVER</button><button data-share="pdf">Export PDF</button></div></div><button class="danger" id="resetButton" data-board-operation="1">Reset Board</button></div></div>
 <div class="status"><span id="coworkerCount"></span><span id="lastChange"></span></div>
 <div id="unassignedWrapper"><div id="unassigned"></div></div><div id="leadership"></div><div id="board" class="board"></div><div id="handoverReminder" class="handover-reminder"><div class="handover-reminder-card"><div class="handover-reminder-title">Share handover now?</div><div class="handover-reminder-actions"><button class="secondary" id="handoverNotNow">Not now</button><button class="primary" id="handoverSaveNow">Save Plan</button></div></div></div>
 <script>
@@ -1752,6 +1754,8 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
 
     // ---------- Panel ----------
 
+    let snapshotCapturedAt = null;
+
     function renderPanel() {
         document.getElementById(PANEL_ID)?.remove();
         const dates = Object.keys(currentDays).sort();
@@ -1770,6 +1774,12 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
         close.style.cssText = `font-family:${TOOL_FONT};border:none;background:#eee;border-radius:5px;padding:8px 12px;cursor:pointer;`;
         close.onclick = () => { panel.remove(); updateButtonState(); };
         top.appendChild(close);
+        if (snapshotCapturedAt) {
+            const stamp = document.createElement('div');
+            stamp.style.cssText = 'font-size:12px;color:#666;margin-top:5px;';
+            stamp.textContent = 'Snapshot · ' + new Intl.DateTimeFormat('en-GB', {dateStyle:'medium',timeStyle:'short'}).format(snapshotCapturedAt);
+            top.firstElementChild.appendChild(stamp);
+        }
         panel.appendChild(top);
         renderDayButtons(panel);
         renderViewTabs(panel);
@@ -1806,6 +1816,7 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
             const absences = buildUnavailableAbsences(rawAbsences);
             const functionMap = buildFunctionMap(settingsJSON);
             currentDays = buildDays(employees, absences, functionMap, trainingActivities);
+            snapshotCapturedAt = new Date();
             const dates = Object.keys(currentDays).sort();
             if (!dates.length) { alert('No scheduled coworkers found.'); return; }
             if (!selectedDate || !currentDays[selectedDate]) selectedDate = dates[0];
