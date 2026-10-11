@@ -190,6 +190,7 @@
     const BOARD_DEPARTMENT_ID = '159';
     const BOARD_DEPARTMENT_CODE = '094-4050';
 
+    let loadedDepartmentId = null;
     let currentDays = {};
     let selectedDate = null;
     let activeView = 'sorted';
@@ -247,7 +248,7 @@
     }
 
     function isBoardDepartment() {
-        return true;
+        return loadedDepartmentId === BOARD_DEPARTMENT_ID;
     }
 
     function buildAbsenceUrl(worktimesUrl) {
@@ -1332,11 +1333,18 @@ ${rows}
         sortedButton.onclick = () => { activeView = 'sorted'; renderPanel(); };
         tabs.appendChild(sortedButton);
 
-        if (isBoardDepartment()) {
-            const boardButton = document.createElement('button');
-            boardButton.textContent = 'Go to Board Planning';
-            boardButton.title = 'Open the operational Interactive Board for the selected day';
-            boardButton.style.cssText = `font-family:${TOOL_FONT};border:2px solid ${TP_BLUE};background:#fff;color:${TP_BLUE};padding:9px 16px;border-radius:7px;font-size:14px;font-weight:700;cursor:pointer;`;
+        const boardAllowed = isBoardDepartment();
+        const boardButton = document.createElement('button');
+        boardButton.textContent = boardAllowed ? 'Go to Board Planning' : '🔒 Go to Board Planning';
+        boardButton.title = boardAllowed
+            ? 'Open the operational Interactive Board for the selected day'
+            : '🔒 Interactive Board is currently available only for 094-4050 Full Serve.';
+        boardButton.disabled = !boardAllowed;
+        boardButton.setAttribute('aria-disabled', String(!boardAllowed));
+        boardButton.style.cssText = boardAllowed
+            ? `font-family:${TOOL_FONT};border:2px solid ${TP_BLUE};background:#fff;color:${TP_BLUE};padding:9px 16px;border-radius:7px;font-size:14px;font-weight:700;cursor:pointer;`
+            : `font-family:${TOOL_FONT};border:2px solid #CCC;background:#F2F2F2;color:#888;padding:9px 16px;border-radius:7px;font-size:14px;font-weight:700;cursor:not-allowed;opacity:.8;`;
+        if (boardAllowed) {
             boardButton.onclick = async () => {
                 boardButton.disabled = true;
                 const originalText = boardButton.textContent;
@@ -1348,8 +1356,8 @@ ${rows}
                     boardButton.textContent = originalText;
                 }
             };
-            tabs.appendChild(boardButton);
         }
+        tabs.appendChild(boardButton);
 
         panel.appendChild(tabs);
     }
@@ -1899,6 +1907,7 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
             const rawCapturedAt = input?.capturedAt ?? input?.payload?.capturedAt;
             snapshotCapturedAt = rawCapturedAt && !Number.isNaN(Date.parse(rawCapturedAt))
                 ? new Date(rawCapturedAt) : new Date();
+            loadedDepartmentId = /^\d+$/.test(p.department) ? p.department : null;
             const employees = normalizeWorktimesResponse(p.worktimes);
             const rawAbsences = normalizeAbsenceResponse(p.absences);
             const trainingActivities = rawAbsences.filter(isTrainingActivity);
