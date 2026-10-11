@@ -1816,13 +1816,17 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
                 });
                 sortedViewModule.renderSortedView(panel);
                 sortedViewRendered = true;
+                console.info('[TimePlan Tools] Sorted View source: EXTERNAL MODULE (src/sorted-view/sorted-view.js)');
             } catch (error) {
                 console.error('Sorted View module failed; falling back to built-in view.', error);
                 // Discard any partial module rendering before using the fallback.
                 while (panel.children.length > panelChildrenBeforeSortedView) panel.lastElementChild.remove();
             }
         }
-        if (!sortedViewRendered) renderSortedView(panel);
+        if (!sortedViewRendered) {
+            console.info('[TimePlan Tools] Sorted View source: ORIGINAL FALLBACK (timeplan-tools-app.js)');
+            renderSortedView(panel);
+        }
         document.body.insertBefore(panel, document.body.firstChild);
         updateButtonState();
     }
