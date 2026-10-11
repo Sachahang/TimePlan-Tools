@@ -31,13 +31,27 @@
     if (status) status.textContent = 'This Board snapshot is no longer available in this tab. Reopen it from TimePlan Tools.';
     return;
   }
-  const script = document.createElement('script');
-  script.src = './timeplan-tools-app.js?v=' + Date.now();
-  script.onerror = function () {
-    const status = document.getElementById('tp-loader-status');
-    if (status) status.textContent = 'Could not load TimePlan Tools. Check your connection and try again.';
+  // Load the optional Sorted View module before the main application.
+  // Until the application is integrated, its original Sorted View remains active.
+  function loadMainApplication() {
+    const script = document.createElement('script');
+    script.src = './timeplan-tools-app.js?v=' + Date.now();
+    script.onerror = function () {
+      const status = document.getElementById('tp-loader-status');
+      if (status) status.textContent = 'Could not load TimePlan Tools. Check your connection and try again.';
+    };
+    document.body.appendChild(script);
+  }
+
+  const sortedModule = document.createElement('script');
+  sortedModule.src = './src/sorted-view/sorted-view.js?v=' + Date.now();
+  sortedModule.onload = loadMainApplication;
+  // The existing application still works if the optional module is unavailable.
+  sortedModule.onerror = function () {
+    console.warn('Sorted View module unavailable; using built-in Sorted View.');
+    loadMainApplication();
   };
-  document.body.appendChild(script);
+  document.body.appendChild(sortedModule);
 })();
 </script>
 </body>
