@@ -1152,36 +1152,20 @@
 
     // ---------- Interactive HTML ----------
 
-    async function getInteractiveExportData() {
-        const workers = getBoardWorkersForSelectedDate();
-        const fontFamily = getNativeTimePlanFontFamily();
-        const portableFontFaceCSS = await collectPortableTimePlanFontFaceCSS(fontFamily);
-        return {
-            date: selectedDate,
-            formattedDate: workers.length ? formatDate(workers[0].start) : selectedDate,
-            department: BOARD_DEPARTMENT_CODE,
-            fontFamily,
-            fontFaceCSS: portableFontFaceCSS || collectTimePlanFontFaceCSS(),
-            stylesheetLinks: getTimePlanStylesheetLinksHTML(),
-            workers: sortWorkersByStart(workers).map(worker => ({
-                key: getWorkerKey(worker),
-                name: worker.name,
-                employeeId: worker.employeeId,
-                isExternal: Boolean(worker.isExternal),
-                start: formatTime(worker.start),
-                end: formatTime(worker.end),
-                effectiveStart: formatTime(getWorkerEffectiveStart(worker)),
-                absences: (worker.absenceSegments || []).map(segment => ({ start: formatTime(segment.start), end: formatTime(segment.end) })),
-                badges: getFunctionBadges(worker),
-                functionNames: getFunctionNames(worker),
-                functionBar: worker.isExternal ? '#777777' : getFunctionBarBackground(worker)
-            })),
-            areas: BOARD_AREAS,
-            assignments: { ...getAssignmentsForSelectedDate() },
-            notPresent: { ...getNotPresentForSelectedDate() },
-            snapshotCapturedAt: snapshotCapturedAt ? snapshotCapturedAt.toISOString() : null
-        };
-    }
+    // Export snapshot preparation lives in the Interactive Board module.
+    // The complete standalone HTML template remains unchanged in this file.
+    const exportData = window.TimePlanInteractiveBoard.createExportData({
+        getBoardWorkersForSelectedDate,
+        getSelectedDate: () => selectedDate,
+        getSnapshotCapturedAt: () => snapshotCapturedAt,
+        getNativeTimePlanFontFamily, collectPortableTimePlanFontFaceCSS,
+        collectTimePlanFontFaceCSS, getTimePlanStylesheetLinksHTML,
+        formatDate, formatTime, sortWorkersByStart, getWorkerKey,
+        getWorkerEffectiveStart, getFunctionBadges, getFunctionNames,
+        getFunctionBarBackground, getAssignmentsForSelectedDate,
+        getNotPresentForSelectedDate, BOARD_DEPARTMENT_CODE, BOARD_AREAS
+    });
+    const getInteractiveExportData = exportData.getInteractiveExportData;
 
     async function buildInteractiveBoardHTML() {
         const data = await getInteractiveExportData();
