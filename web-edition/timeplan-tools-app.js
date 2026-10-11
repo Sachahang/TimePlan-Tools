@@ -1800,7 +1800,29 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
         renderViewTabs(panel);
         // Keep TimePlan Tools focused on the roster. The operational board
         // opens in its own Interactive Board tab via Go to Board Planning.
-        renderSortedView(panel);
+        // Prefer the extracted Sorted View module; keep the original renderer as fallback.
+        // The module receives the current date and roster on each render.
+        let sortedViewRendered = false;
+        const panelChildrenBeforeSortedView = panel.children.length;
+        if (typeof window.TimePlanSortedView === 'function') {
+            try {
+                const sortedViewModule = window.TimePlanSortedView({
+                    TP_BLUE, TOOL_FONT, BOARD_DEPARTMENT_CODE,
+                    formatTime, formatDate, escapeHTML, getUniqueCoworkerCount,
+                    renderDayHeader, sortWorkersByOfficialStart,
+                    renderCapabilityBadges, renderFunctionBadges, getFunctionBadges,
+                    normalizeHexColor, getContrastTextColor,
+                    currentDays, selectedDate
+                });
+                sortedViewModule.renderSortedView(panel);
+                sortedViewRendered = true;
+            } catch (error) {
+                console.error('Sorted View module failed; falling back to built-in view.', error);
+                // Discard any partial module rendering before using the fallback.
+                while (panel.children.length > panelChildrenBeforeSortedView) panel.lastElementChild.remove();
+            }
+        }
+        if (!sortedViewRendered) renderSortedView(panel);
         document.body.insertBefore(panel, document.body.firstChild);
         updateButtonState();
     }
