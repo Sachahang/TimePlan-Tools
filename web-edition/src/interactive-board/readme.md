@@ -1,1 +1,0 @@
-    Interactive Board - TimePlan Tools
