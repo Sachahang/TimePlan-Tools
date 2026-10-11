@@ -14,6 +14,23 @@
 /* Always request the latest published application code on each page load.
    The bookmarklet and saved roster snapshot remain unchanged. */
 (function () {
+  // When a generated Interactive Board is refreshed, restore the board
+  // instead of displaying a blank tab or the normal roster loader.
+  const boardId = new URLSearchParams(location.search).get('tp_board');
+  if (boardId && /^tp-board-[a-zA-Z0-9-]+$/.test(boardId)) {
+    const recoveryKey = 'timeplan-tools-board-recovery-' + boardId;
+    const savedBoard = sessionStorage.getItem(recoveryKey);
+    if (savedBoard && savedBoard.startsWith('<!DOCTYPE html>')) {
+      document.open();
+      document.write(savedBoard);
+      document.close();
+      window.__tpBoardRecoveryKey = recoveryKey;
+      return;
+    }
+    const status = document.getElementById('tp-loader-status');
+    if (status) status.textContent = 'This Board snapshot is no longer available in this tab. Reopen it from TimePlan Tools.';
+    return;
+  }
   const script = document.createElement('script');
   script.src = './timeplan-tools-app.js?v=' + Date.now();
   script.onerror = function () {
