@@ -110,9 +110,57 @@
         return Object.freeze({ applyBasicPlan });
     }
 
+    // Prepare the snapshot consumed by the standalone board HTML generator.
+    // Live roster state and browser/font helpers remain owned by the main app.
+    function createExportData(deps) {
+        const {
+            getBoardWorkersForSelectedDate, getSelectedDate, getSnapshotCapturedAt,
+            getNativeTimePlanFontFamily, collectPortableTimePlanFontFaceCSS,
+            collectTimePlanFontFaceCSS, getTimePlanStylesheetLinksHTML,
+            formatDate, formatTime, sortWorkersByStart, getWorkerKey,
+            getWorkerEffectiveStart, getFunctionBadges, getFunctionNames,
+            getFunctionBarBackground, getAssignmentsForSelectedDate,
+            getNotPresentForSelectedDate, BOARD_DEPARTMENT_CODE, BOARD_AREAS
+        } = deps;
+
+        async function getInteractiveExportData() {
+            const workers = getBoardWorkersForSelectedDate();
+            const fontFamily = getNativeTimePlanFontFamily();
+            const portableFontFaceCSS = await collectPortableTimePlanFontFaceCSS(fontFamily);
+            return {
+                date: getSelectedDate(),
+                formattedDate: workers.length ? formatDate(workers[0].start) : getSelectedDate(),
+                department: BOARD_DEPARTMENT_CODE,
+                fontFamily,
+                fontFaceCSS: portableFontFaceCSS || collectTimePlanFontFaceCSS(),
+                stylesheetLinks: getTimePlanStylesheetLinksHTML(),
+                workers: sortWorkersByStart(workers).map(worker => ({
+                    key: getWorkerKey(worker),
+                    name: worker.name,
+                    employeeId: worker.employeeId,
+                    isExternal: Boolean(worker.isExternal),
+                    start: formatTime(worker.start),
+                    end: formatTime(worker.end),
+                    effectiveStart: formatTime(getWorkerEffectiveStart(worker)),
+                    absences: (worker.absenceSegments || []).map(segment => ({ start: formatTime(segment.start), end: formatTime(segment.end) })),
+                    badges: getFunctionBadges(worker),
+                    functionNames: getFunctionNames(worker),
+                    functionBar: worker.isExternal ? '#777777' : getFunctionBarBackground(worker)
+                })),
+                areas: BOARD_AREAS,
+                assignments: { ...getAssignmentsForSelectedDate() },
+                notPresent: { ...getNotPresentForSelectedDate() },
+                snapshotCapturedAt: getSnapshotCapturedAt() ? getSnapshotCapturedAt().toISOString() : null
+            };
+        }
+
+        return Object.freeze({ getInteractiveExportData });
+    }
+
     global.TimePlanInteractiveBoard = Object.freeze({
         isSupportedDepartment,
         getDefaultFlows,
-        createBasicPlan
+        createBasicPlan,
+        createExportData
     });
 })(window);
