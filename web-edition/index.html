@@ -31,8 +31,7 @@
     if (status) status.textContent = 'This Board snapshot is no longer available in this tab. Reopen it from TimePlan Tools.';
     return;
   }
-  // Load the optional Sorted View module before the main application.
-  // Until the application is integrated, its original Sorted View remains active.
+  // Load the modules in order before the main application.
   function loadMainApplication() {
     const script = document.createElement('script');
     script.src = './timeplan-tools-app.js?v=' + Date.now();
@@ -43,13 +42,24 @@
     document.body.appendChild(script);
   }
 
+  function loadFullServeModule() {
+    const module = document.createElement('script');
+    module.src = './src/departments/full-serve.js?v=' + Date.now();
+    module.onload = loadMainApplication;
+    // The main app still has its existing Full Serve configuration.
+    module.onerror = function () {
+      console.warn('Full Serve configuration module unavailable; using existing app configuration.');
+      loadMainApplication();
+    };
+    document.body.appendChild(module);
+  }
+
   const sortedModule = document.createElement('script');
   sortedModule.src = './src/sorted-view/sorted-view.js?v=' + Date.now();
-  sortedModule.onload = loadMainApplication;
-  // The existing application still works if the optional module is unavailable.
+  sortedModule.onload = loadFullServeModule;
   sortedModule.onerror = function () {
-    console.warn('Sorted View module unavailable; using built-in Sorted View.');
-    loadMainApplication();
+    console.warn('Sorted View module unavailable.');
+    loadFullServeModule();
   };
   document.body.appendChild(sortedModule);
 })();
