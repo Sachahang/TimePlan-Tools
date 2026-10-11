@@ -187,8 +187,16 @@
         return String(value || '').replace(/<\/style/gi, '<\\/style');
     }
 
-    const BOARD_DEPARTMENT_ID = '159';
-    const BOARD_DEPARTMENT_CODE = '094-4050';
+    // Full Serve configuration is maintained in src/departments/full-serve.js.
+    // This module must load before the main application (see index.html).
+    const fullServeDepartment = window.TimePlanFullServe;
+    if (!fullServeDepartment || !fullServeDepartment.departmentId ||
+        !fullServeDepartment.departmentCode || !Array.isArray(fullServeDepartment.areas)) {
+        throw new Error('TimePlan Tools: Full Serve configuration module is missing or invalid.');
+    }
+    const BOARD_DEPARTMENT_ID = fullServeDepartment.departmentId;
+    const BOARD_DEPARTMENT_CODE = fullServeDepartment.departmentCode;
+    const BOARD_AREAS = fullServeDepartment.areas;
 
     let loadedDepartmentId = null;
     let currentDays = {};
@@ -200,30 +208,6 @@
     const notPresentByDate = {};
     const externalWorkersByDate = {};
 
-
-    const BOARD_AREAS = [
-        { group: 'Click & Collect', id: 'cc', areas: [
-            { id: 'cc-floor', name: 'Floor' },
-            { id: 'cc-mh', name: 'MH' },
-            { id: 'cc-reachtruck', name: 'Reachtruck' },
-            { id: 'cc-tpl', name: 'TPL' },
-            { id: 'cc-extra', name: 'Extra' }
-        ]},
-        { group: 'LCD', id: 'lcd', areas: [
-            { id: 'lcd-floor', name: 'Floor' },
-            { id: 'lcd-mh', name: 'MH' },
-            { id: 'lcd-reachtruck', name: 'Reachtruck' },
-            { id: 'lcd-loading-checking', name: 'Loading & Checking' },
-            { id: 'lcd-tpl', name: 'TPL' },
-            { id: 'lcd-extra', name: 'Extra' }
-        ]},
-        { group: 'FullServe', id: 'fullserve', areas: [
-            { id: 'fs-vulpicks', name: 'VULPICKS' },
-            { id: 'fs-tpl', name: 'TPL' },
-            { id: 'fs-external-returns', name: 'External Returns' },
-            { id: 'fs-extra', name: 'Extra' }
-        ]}
-    ];
 
     // ---------- Page / API discovery ----------
 
