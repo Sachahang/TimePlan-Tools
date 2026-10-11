@@ -792,114 +792,22 @@
 
     // ---------- Board state ----------
 
-    function getWorkerKey(worker) { return worker.key || [worker.employeeId, worker.start, worker.end].join('|'); }
-    function getAssignmentsForSelectedDate() { return (boardAssignments[selectedDate] ||= {}); }
-    function getNotPresentForSelectedDate() { return (notPresentByDate[selectedDate] ||= {}); }
-    function getExternalWorkersForSelectedDate() { return (externalWorkersByDate[selectedDate] ||= []); }
-    function getBoardWorkersForSelectedDate() { return [...(currentDays[selectedDate] || []), ...getExternalWorkersForSelectedDate()]; }
-    function getWorkerAssignment(worker) { return getAssignmentsForSelectedDate()[getWorkerKey(worker)] || 'unassigned'; }
-    function assignWorker(key, area) { getAssignmentsForSelectedDate()[key] = area; }
-
-    function setWorkerNotPresent(worker, value) {
-        const key = getWorkerKey(worker);
-        if (value) {
-            getNotPresentForSelectedDate()[key] = true;
-            assignWorker(key, 'unassigned');
-        } else {
-            delete getNotPresentForSelectedDate()[key];
-        }
-        renderPanel();
-    }
-
-    function makeExternalTimestamp(time) {
-        return `${selectedDate}T${time}:00.000Z`;
-    }
-
-    function isValidClock(value) {
-        return /^(?:[01]\\d|2[0-3]):[0-5]\\d$/.test(String(value || '').trim());
-    }
-
-    function addExternalHelp() {
-        const name = prompt('External coworker name:');
-        if (!name || !name.trim()) return;
-        const start = prompt('Shift start (HH:MM):', '08:00');
-        if (!isValidClock(start)) return alert('Please use HH:MM, for example 08:00.');
-        const end = prompt('Shift end (HH:MM):', '16:00');
-        if (!isValidClock(end)) return alert('Please use HH:MM, for example 16:00.');
-        if (timeToMinutes(makeExternalTimestamp(end)) <= timeToMinutes(makeExternalTimestamp(start))) return alert('End time must be later than start time.');
-
-        const id = `ext-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        const worker = {
-            key: `external|${id}`,
-            externalId: id,
-            isExternal: true,
-            employeeId: 'EXT',
-            name: name.trim(),
-            start: makeExternalTimestamp(start),
-            end: makeExternalTimestamp(end),
-            effectiveStart: makeExternalTimestamp(start),
-            absenceSegments: [],
-            functionSegments: []
-        };
-        getExternalWorkersForSelectedDate().push(worker);
-        assignWorker(worker.key, 'unassigned');
-        unassignedCollapsedByDate[selectedDate] = false;
-        renderPanel();
-    }
-
-    function editExternalHelp(worker) {
-        if (!worker?.isExternal) return;
-        const name = prompt('External coworker name:', worker.name);
-        if (!name || !name.trim()) return;
-        const start = prompt('Shift start (HH:MM):', formatTime(worker.start));
-        if (!isValidClock(start)) return alert('Please use HH:MM, for example 08:00.');
-        const end = prompt('Shift end (HH:MM):', formatTime(worker.end));
-        if (!isValidClock(end)) return alert('Please use HH:MM, for example 16:00.');
-        if (timeToMinutes(makeExternalTimestamp(end)) <= timeToMinutes(makeExternalTimestamp(start))) return alert('End time must be later than start time.');
-        worker.name = name.trim();
-        worker.start = makeExternalTimestamp(start);
-        worker.end = makeExternalTimestamp(end);
-        worker.effectiveStart = makeExternalTimestamp(start);
-        renderPanel();
-    }
-
-    function removeExternalHelp(worker) {
-        if (!worker?.isExternal) return;
-        if (!confirm(`Remove external coworker ${worker.name}?`)) return;
-        const list = getExternalWorkersForSelectedDate();
-        const index = list.findIndex(item => getWorkerKey(item) === getWorkerKey(worker));
-        if (index >= 0) list.splice(index, 1);
-        delete getAssignmentsForSelectedDate()[getWorkerKey(worker)];
-        delete getNotPresentForSelectedDate()[getWorkerKey(worker)];
-        renderPanel();
-    }
-
-    function resetBoard() {
-        boardAssignments[selectedDate] = {};
-        notPresentByDate[selectedDate] = {};
-        externalWorkersByDate[selectedDate] = [];
-        unassignedCollapsedByDate[selectedDate] = false;
-        renderPanel();
-    }
-
-    function buildWorkersByArea(workers) {
-        const result = { unassigned: [], leadership: [] };
-        BOARD_AREAS.forEach(group => group.areas.forEach(area => result[area.id] = []));
-        workers.forEach(worker => (result[getWorkerAssignment(worker)] || result.unassigned).push(worker));
-        Object.keys(result).forEach(area => result[area] = sortWorkersByStart(result[area]));
-        return result;
-    }
-
-    function findAreaInfo(areaId) {
-        if (areaId === 'leadership') return { flow: 'Leadership', area: 'Order Auditor - Coordinator' };
-        if (areaId === 'unassigned') return { flow: 'Unassigned', area: 'Unassigned' };
-        for (const group of BOARD_AREAS) {
-            const area = group.areas.find(item => item.id === areaId);
-            if (area) return { flow: group.group, area: area.name };
-        }
-        return { flow: 'Unassigned', area: 'Unassigned' };
-    }
-
+    // Board state operations now live in the Interactive Board module.
+    const boardState = window.TimePlanInteractiveBoard.createBoardState({
+        boardAssignments, notPresentByDate, externalWorkersByDate,
+        unassignedCollapsedByDate,
+        getSelectedDate: () => selectedDate,
+        getCurrentDays: () => currentDays,
+        BOARD_AREAS, timeToMinutes, formatTime, sortWorkersByStart,
+        renderPanel
+    });
+    const {
+        getWorkerKey, getAssignmentsForSelectedDate, getNotPresentForSelectedDate,
+        getExternalWorkersForSelectedDate, getBoardWorkersForSelectedDate,
+        getWorkerAssignment, assignWorker, setWorkerNotPresent,
+        addExternalHelp, editExternalHelp, removeExternalHelp, resetBoard,
+        buildWorkersByArea, findAreaInfo
+    } = boardState;
 
     // ---------- Basic Plan templates ----------
 
@@ -1208,58 +1116,20 @@
 
     // ---------- CSV ----------
 
-    function csvEscape(value) {
-        const text = String(value ?? '');
-        return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-    }
-
-    function exportBoardToCSV() {
-        const workers = getBoardWorkersForSelectedDate();
-        if (!workers?.length) return;
-        const headers = ['Date', 'Coworker', 'Employee ID', 'Start', 'End', 'Flow', 'Area', 'Status', 'Badges', 'Functions'];
-        const rows = sortWorkersByStart(workers).map(worker => {
-            const area = findAreaInfo(getWorkerAssignment(worker));
-            return [selectedDate, worker.name, worker.employeeId, formatTime(worker.start), formatTime(worker.end), area.flow, area.area, isWorkerNotPresent(worker) ? 'Not Present' : (worker.isExternal ? 'External Help' : 'Present'), getCapabilityLabels(worker).join('|'), getFunctionNames(worker).join('|')];
-        });
-        const csv = [headers, ...rows].map(row => row.map(csvEscape).join(',')).join('\r\n');
-        downloadBlob(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }), `TimePlan-Board-${BOARD_DEPARTMENT_CODE}-${selectedDate}.csv`);
-    }
-
-    function downloadBlob(blob, filename) {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-    }
-
-    // ---------- Main Board PDF ----------
-
-    function renderPDFWorker(worker) {
-        return `<div class="worker"><span class="worker-bar" style="background:${getFunctionBarBackground(worker)};"></span><div class="worker-name">${escapeHTML(worker.name)} ${renderCapabilityBadges(worker, true)}</div><div class="worker-time"><strong>${formatTime(worker.start)}</strong><span> &rarr; ${formatTime(worker.end)}</span></div>${renderAbsenceIndicator(worker, true)}</div>`;
-    }
-
-    function renderPDFArea(name, workers) {
-        return `<div class="area"><div class="area-title"><span>${escapeHTML(name)}</span><span>${workers.length}</span></div><div class="area-workers">${workers.length ? sortWorkersByStart(workers).map(renderPDFWorker).join('') : '-'}</div></div>`;
-    }
-
-    function exportBoardToPDF() {
-        const workers = currentDays[selectedDate];
-        if (!workers?.length) return;
-        const byArea = buildWorkersByArea(workers);
-        const popup = window.open('', '_blank', 'width=1400,height=900');
-        if (!popup) return alert('The browser blocked the print window.');
-        const columns = BOARD_AREAS.map(group => `<section class="flow"><div class="flow-header">${escapeHTML(group.group)}</div>${group.areas.map(area => renderPDFArea(area.name, byArea[area.id])).join('')}</section>`).join('');
-
-        popup.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
-*{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}@page{size:A4 landscape;margin:9mm}body{margin:0;font-family:${TOOL_FONT};color:#222}.header{display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:10px;margin-bottom:10px;border-bottom:4px solid ${TP_BLUE}}.title{color:${TP_BLUE};font-size:24px;font-weight:800}.date{margin-top:4px;font-size:16px;font-weight:700}.meta{text-align:right;color:#555;font-size:11px}.leadership{margin-bottom:9px}.board{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.flow{border:1px solid #CCC;border-radius:7px;overflow:hidden}.flow-header{padding:8px 10px;background:${TP_BLUE}!important;color:white!important;font-size:14px;font-weight:800}.area{margin:6px;padding:6px;background:#F7F7F7!important;border:1px solid #DDD;border-radius:6px}.area-title{display:flex;justify-content:space-between;margin-bottom:5px;font-size:11px;font-weight:800;text-transform:uppercase}.area-workers{display:flex;flex-wrap:wrap;gap:4px;font-size:10px}.worker{position:relative;overflow:hidden;min-width:110px;max-width:160px;padding:5px 6px 5px 10px;background:white!important;border:1px solid #CCC;border-radius:5px}.worker-bar{position:absolute;left:0;top:0;bottom:0;width:4px}.worker-name{display:flex;flex-wrap:wrap;align-items:center;gap:3px;font-weight:800}.worker-time{margin-top:2px;font-size:9px}.worker-time strong{color:#222;font-weight:900}.worker-time span{color:#666;font-weight:700}
-</style></head><body><div class="header"><div><div class="title">DAILY BOARD PLAN</div><div class="date">${escapeHTML(formatDate(workers[0].start))}</div></div><div class="meta">${getUniqueCoworkerCount(workers)} coworkers<br>Department ${BOARD_DEPARTMENT_CODE}<br>Generated ${formatGeneratedTime()}</div></div><div class="leadership">${renderPDFArea('ORDER AUDITOR - COORDINATOR', byArea.leadership)}</div><div class="board">${columns}</div>${byArea.unassigned.length ? renderPDFArea('UNASSIGNED', byArea.unassigned) : ''}</body></html>`);
-        popup.document.close();
-        setTimeout(() => popup.print(), 400);
-    }
+    // CSV and PDF exports now live in the Interactive Board module.
+    const boardExports = window.TimePlanInteractiveBoard.createBoardExports({
+        getBoardWorkersForSelectedDate,
+        getSelectedDate: () => selectedDate,
+        getCurrentDays: () => currentDays,
+        sortWorkersByStart, findAreaInfo, getWorkerAssignment,
+        isWorkerNotPresent, getCapabilityLabels, getFunctionNames,
+        formatTime, BOARD_DEPARTMENT_CODE, buildWorkersByArea,
+        BOARD_AREAS, escapeHTML, TOOL_FONT, TP_BLUE,
+        getFunctionBarBackground, renderCapabilityBadges,
+        renderAbsenceIndicator, getUniqueCoworkerCount,
+        formatDate, formatGeneratedTime
+    });
+    const { exportBoardToCSV, exportBoardToPDF, downloadBlob } = boardExports;
 
     // ---------- Panel ----------
 
