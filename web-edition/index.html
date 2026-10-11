@@ -10,6 +10,18 @@
 </head>
 <body>
 <div class="loader" id="tp-loader-card"><div class="card"><h1>TimePlan Tools</h1><div class="version">Department Plan</div><div class="status" id="tp-loader-status">Ready to load your roster…</div><div class="note">Open Department Plan in TimePlan, then select the TimePlan Tools favorite.</div></div></div>
-<script src="./timeplan-tools-app.js?v=web-edition-stable1"></script>
+<script>
+/* Always request the latest published application code on each page load.
+   The bookmarklet and saved roster snapshot remain unchanged. */
+(function () {
+  const script = document.createElement('script');
+  script.src = './timeplan-tools-app.js?v=' + Date.now();
+  script.onerror = function () {
+    const status = document.getElementById('tp-loader-status');
+    if (status) status.textContent = 'Could not load TimePlan Tools. Check your connection and try again.';
+  };
+  document.body.appendChild(script);
+})();
+</script>
 </body>
 </html>
