@@ -42,14 +42,26 @@
     document.body.appendChild(script);
   }
 
+  function loadInteractiveBoardModule() {
+    const module = document.createElement('script');
+    module.src = './src/interactive-board/interactive-board.js?v=' + Date.now();
+    module.onload = loadMainApplication;
+    module.onerror = function () {
+      console.warn('Interactive Board module unavailable; existing board remains in the main app.');
+      loadMainApplication();
+    };
+    document.body.appendChild(module);
+  }
+
   function loadFullServeModule() {
     const module = document.createElement('script');
     module.src = './src/departments/full-serve.js?v=' + Date.now();
-    module.onload = loadMainApplication;
-    // The main app still has its existing Full Serve configuration.
+    module.onload = loadInteractiveBoardModule;
+    // Full Serve configuration is required by the main application.
     module.onerror = function () {
-      console.warn('Full Serve configuration module unavailable; using existing app configuration.');
-      loadMainApplication();
+      console.error('Full Serve configuration module unavailable.');
+      const status = document.getElementById('tp-loader-status');
+      if (status) status.textContent = 'Could not load Full Serve configuration. Refresh and try again.';
     };
     document.body.appendChild(module);
   }
