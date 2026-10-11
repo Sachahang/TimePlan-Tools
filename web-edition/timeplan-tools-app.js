@@ -232,7 +232,8 @@
     }
 
     function isBoardDepartment() {
-        return loadedDepartmentId === BOARD_DEPARTMENT_ID;
+        // Interactive Board eligibility is now owned by its external module.
+        return window.TimePlanInteractiveBoard.isSupportedDepartment(loadedDepartmentId);
     }
 
     function buildAbsenceUrl(worktimesUrl) {
