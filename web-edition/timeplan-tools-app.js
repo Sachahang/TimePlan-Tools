@@ -1449,7 +1449,17 @@ let draggedFlowId=null;
 let unassignedCollapsed=false;
 let boardEditMode=false;
 let dirty=false;
-function setDirty(value=true){dirty=value}
+function setDirty(value=true){dirty=value;if(value)queueBoardRecoverySave()}
+function queueBoardRecoverySave(){
+  if(!window.__tpBoardRecoveryKey)return;
+  clearTimeout(window.__tpBoardRecoveryTimer);
+  window.__tpBoardRecoveryTimer=setTimeout(saveBoardRecovery,100);
+}
+function saveBoardRecovery(){
+  if(!window.__tpBoardRecoveryKey)return;
+  try{sessionStorage.setItem(window.__tpBoardRecoveryKey,currentPortableHTML())}
+  catch(err){console.warn('Board recovery save failed:',err)}
+}
 function syncExternalWorkers(){externalWorkers=DATA.workers.filter(w=>w.isExternal).map(w=>({...w}))}
 function esc(v){return String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;')}
 function contrast(hex){const c=String(hex||'#666666').replace('#','');const r=parseInt(c.substring(0,2),16),g=parseInt(c.substring(2,4),16),b=parseInt(c.substring(4,6),16);return((r*299+g*587+b*114)/1000)>155?'#222':'#FFF'}
@@ -1508,7 +1518,7 @@ async function quickShare(){saveHTML()}
 function preparePrintLayout(){document.querySelectorAll('.print-hidden').forEach(el=>el.classList.remove('print-hidden'));if(workersFor('unassigned').length===0)document.getElementById('unassignedWrapper').classList.add('print-hidden');if(workersFor('leadership').length===0)document.getElementById('leadership').classList.add('print-hidden');const supportEl=document.getElementById('support');if(supportEl&&workersFor('support').length===0)supportEl.classList.add('print-hidden');document.querySelectorAll('#board .flow').forEach((flow,index)=>{let visible=0;flow.querySelectorAll('.dropzone').forEach(zone=>{const count=workersFor(zone.dataset.areaId).length;if(count===0)zone.classList.add('print-hidden');else visible+=count});if(visible===0)flow.classList.add('print-hidden')});const visibleFlows=[...document.querySelectorAll('#board .flow')].filter(el=>!el.classList.contains('print-hidden')).length;document.documentElement.style.setProperty('--print-columns',String(Math.max(1,Math.min(3,visibleFlows||1))))}
 function cleanupPrintLayout(){document.querySelectorAll('.print-hidden').forEach(el=>el.classList.remove('print-hidden'));document.documentElement.style.removeProperty('--print-columns')}
 function exportPDF(){preparePrintLayout();setTimeout(()=>window.print(),30)}
-const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=document.getElementById('basicPlanMenu'),shareButton=document.getElementById('shareButton'),shareMenu=document.getElementById('shareMenu');basicPlanButton.onclick=e=>{e.stopPropagation();shareMenu.style.display='none';basicPlanMenu.style.display=basicPlanMenu.style.display==='block'?'none':'block'};document.querySelectorAll('.basic-plan-choice').forEach(b=>b.onclick=e=>{e.stopPropagation();basicPlanMenu.style.display='none';applyBasicPlan(b.dataset.mode)});document.getElementById('externalButton').onclick=addExternal;document.getElementById('kraftButton').onclick=addQuickKraftsamla;const editFlowsButton=document.getElementById('editFlowsButton'),addFlowButton=document.getElementById('addFlowButton');editFlowsButton.onclick=()=>{boardEditMode=!boardEditMode;document.querySelectorAll('[data-board-operation]').forEach(b=>{b.disabled=boardEditMode;b.style.opacity=boardEditMode?'.45':'1';b.style.cursor=boardEditMode?'not-allowed':''});editFlowsButton.textContent=boardEditMode?'Done Editing':'Edit Flows';editFlowsButton.style.background=boardEditMode?'#2E7D32':'white';editFlowsButton.style.borderColor=boardEditMode?'#2E7D32':'#AAA';editFlowsButton.style.color=boardEditMode?'white':'#333';addFlowButton.style.display=boardEditMode?'inline-block':'none';addFlowButton.style.background=boardEditMode?'#EAF3FA':'white';addFlowButton.style.borderColor=boardEditMode?'#8EBFE3':'#AAA';addFlowButton.style.color=boardEditMode?'#0058A3':'#333';last(boardEditMode?'Flow editing mode — finish editing to operate the board':'Flow editing finished');render()};addFlowButton.onclick=addFlow;shareButton.onclick=e=>{e.stopPropagation();basicPlanMenu.style.display='none';shareMenu.style.display=shareMenu.style.display==='block'?'none':'block'};shareMenu.onclick=e=>e.stopPropagation();shareMenu.querySelector('[data-share="quick"]').onclick=()=>{shareMenu.style.display='none';saveHTML()};shareMenu.querySelector('[data-share="pdf"]').onclick=()=>{shareMenu.style.display='none';exportPDF()};document.getElementById('resetButton').onclick=resetBoard;const reminder=document.getElementById('handoverReminder');document.getElementById('handoverNotNow').onclick=()=>reminder.classList.remove('show');document.getElementById('handoverSaveNow').onclick=()=>{reminder.classList.remove('show');saveHTML()};document.addEventListener('click',()=>{basicPlanMenu.style.display='none';shareMenu.style.display='none';document.querySelectorAll('.magnet-menu').forEach(m=>m.style.display='none');document.querySelectorAll('.worker.menu-open').forEach(w=>w.classList.remove('menu-open'))});window.addEventListener('beforeunload',e=>{e.preventDefault();e.returnValue=''});window.addEventListener('beforeprint',preparePrintLayout);window.addEventListener('afterprint',cleanupPrintLayout);window.addEventListener('resize',()=>{requestAnimationFrame(updateSticky);requestAnimationFrame(repositionOpenMenu)});window.addEventListener('scroll',()=>{requestAnimationFrame(repositionOpenMenu)},true);setInterval(refreshHeaderTimes,1000);setInterval(()=>{const now=new Date();if(DATA.date===localISODate()&&!handoverReminderShown&&now.getHours()===13&&now.getMinutes()>=50&&now.getMinutes()<55){handoverReminderShown=true;reminder.classList.add('show')}if(!document.querySelector('.magnet-menu[style*="block"]'))render()},10000);render();
+const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=document.getElementById('basicPlanMenu'),shareButton=document.getElementById('shareButton'),shareMenu=document.getElementById('shareMenu');basicPlanButton.onclick=e=>{e.stopPropagation();shareMenu.style.display='none';basicPlanMenu.style.display=basicPlanMenu.style.display==='block'?'none':'block'};document.querySelectorAll('.basic-plan-choice').forEach(b=>b.onclick=e=>{e.stopPropagation();basicPlanMenu.style.display='none';applyBasicPlan(b.dataset.mode)});document.getElementById('externalButton').onclick=addExternal;document.getElementById('kraftButton').onclick=addQuickKraftsamla;const editFlowsButton=document.getElementById('editFlowsButton'),addFlowButton=document.getElementById('addFlowButton');editFlowsButton.onclick=()=>{boardEditMode=!boardEditMode;document.querySelectorAll('[data-board-operation]').forEach(b=>{b.disabled=boardEditMode;b.style.opacity=boardEditMode?'.45':'1';b.style.cursor=boardEditMode?'not-allowed':''});editFlowsButton.textContent=boardEditMode?'Done Editing':'Edit Flows';editFlowsButton.style.background=boardEditMode?'#2E7D32':'white';editFlowsButton.style.borderColor=boardEditMode?'#2E7D32':'#AAA';editFlowsButton.style.color=boardEditMode?'white':'#333';addFlowButton.style.display=boardEditMode?'inline-block':'none';addFlowButton.style.background=boardEditMode?'#EAF3FA':'white';addFlowButton.style.borderColor=boardEditMode?'#8EBFE3':'#AAA';addFlowButton.style.color=boardEditMode?'#0058A3':'#333';last(boardEditMode?'Flow editing mode — finish editing to operate the board':'Flow editing finished');render()};addFlowButton.onclick=addFlow;shareButton.onclick=e=>{e.stopPropagation();basicPlanMenu.style.display='none';shareMenu.style.display=shareMenu.style.display==='block'?'none':'block'};shareMenu.onclick=e=>e.stopPropagation();shareMenu.querySelector('[data-share="quick"]').onclick=()=>{shareMenu.style.display='none';saveHTML()};shareMenu.querySelector('[data-share="pdf"]').onclick=()=>{shareMenu.style.display='none';exportPDF()};document.getElementById('resetButton').onclick=resetBoard;const reminder=document.getElementById('handoverReminder');document.getElementById('handoverNotNow').onclick=()=>reminder.classList.remove('show');document.getElementById('handoverSaveNow').onclick=()=>{reminder.classList.remove('show');saveHTML()};document.addEventListener('click',()=>{basicPlanMenu.style.display='none';shareMenu.style.display='none';document.querySelectorAll('.magnet-menu').forEach(m=>m.style.display='none');document.querySelectorAll('.worker.menu-open').forEach(w=>w.classList.remove('menu-open'))});window.addEventListener('beforeunload',e=>{saveBoardRecovery();e.preventDefault();e.returnValue=''});window.addEventListener('beforeprint',preparePrintLayout);window.addEventListener('afterprint',cleanupPrintLayout);window.addEventListener('resize',()=>{requestAnimationFrame(updateSticky);requestAnimationFrame(repositionOpenMenu)});window.addEventListener('scroll',()=>{requestAnimationFrame(repositionOpenMenu)},true);setInterval(refreshHeaderTimes,1000);setInterval(()=>{const now=new Date();if(DATA.date===localISODate()&&!handoverReminderShown&&now.getHours()===13&&now.getMinutes()>=50&&now.getMinutes()<55){handoverReminderShown=true;reminder.classList.add('show')}if(!document.querySelector('.magnet-menu[style*="block"]'))render()},10000);render();
 <\/script>
 </body>
 </html>`;
@@ -1523,6 +1533,19 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
         newWindow.document.open();
         newWindow.document.write(html);
         newWindow.document.close();
+        // Give this generated board a real reloadable URL. On refresh, index.html
+        // restores the last board HTML saved in this tab's sessionStorage.
+        const boardId = 'tp-board-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
+        const recoveryKey = 'timeplan-tools-board-recovery-' + boardId;
+        try {
+            newWindow.__tpBoardRecoveryKey = recoveryKey;
+            newWindow.sessionStorage.setItem(recoveryKey, html);
+            const boardURL = new URL('./index.html', location.href);
+            boardURL.searchParams.set('tp_board', boardId);
+            newWindow.history.replaceState(null, '', boardURL.href);
+        } catch (error) {
+            console.warn('Interactive Board reload recovery could not be enabled:', error);
+        }
     }
 
     async function downloadInteractiveHTML() {
@@ -1764,11 +1787,6 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
             stamp.textContent = 'Snapshot · ' + new Intl.DateTimeFormat('en-GB', {dateStyle:'medium',timeStyle:'short'}).format(snapshotCapturedAt);
             top.firstElementChild.appendChild(stamp);
         }
-        // Temporary visual marker to verify automatic JavaScript updates.
-        const updateTest = document.createElement('div');
-        updateTest.textContent = '🟢 Auto-update test — v2';
-        updateTest.style.cssText = 'display:inline-block;margin-top:7px;padding:4px 9px;border-radius:5px;background:#E6F4EA;color:#176B36;font-size:12px;font-weight:700;';
-        top.firstElementChild.appendChild(updateTest);
         panel.appendChild(top);
         renderDayButtons(panel);
         renderViewTabs(panel);
