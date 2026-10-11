@@ -6,7 +6,7 @@
   'use strict';
   global.TimePlanSortedView = function createSortedView(deps) {
     const { TP_BLUE, TOOL_FONT, BOARD_DEPARTMENT_CODE, formatTime,
-      formatDate, escapeHTML, getUniqueCoworkerCount,
+      formatDate, escapeHTML, getUniqueCoworkerCount, renderDayHeader,
       sortWorkersByOfficialStart, renderCapabilityBadges,
       renderFunctionBadges, getFunctionBadges, normalizeHexColor,
       getContrastTextColor } = deps;
