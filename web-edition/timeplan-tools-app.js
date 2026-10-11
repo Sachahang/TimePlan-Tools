@@ -1764,6 +1764,11 @@ const basicPlanButton=document.getElementById('basicPlanButton'),basicPlanMenu=d
             stamp.textContent = 'Snapshot · ' + new Intl.DateTimeFormat('en-GB', {dateStyle:'medium',timeStyle:'short'}).format(snapshotCapturedAt);
             top.firstElementChild.appendChild(stamp);
         }
+        // Temporary visual marker to verify automatic JavaScript updates.
+        const updateTest = document.createElement('div');
+        updateTest.textContent = '🟢 Auto-update test — v2';
+        updateTest.style.cssText = 'display:inline-block;margin-top:7px;padding:4px 9px;border-radius:5px;background:#E6F4EA;color:#176B36;font-size:12px;font-weight:700;';
+        top.firstElementChild.appendChild(updateTest);
         panel.appendChild(top);
         renderDayButtons(panel);
         renderViewTabs(panel);
