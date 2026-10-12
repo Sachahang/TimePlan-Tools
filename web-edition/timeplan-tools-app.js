@@ -527,7 +527,12 @@
             return false;
         }
     }
-    function setStandaloneStatus(message, isError = false) {
+    function setStandaloneStatus(message, isError = false, isLoading = false) {
+        if (typeof window.TimePlanLoader === 'function') {
+            window.TimePlanLoader(isError ? 'error' : isLoading ? 'loading' : 'ready', message);
+            return;
+        }
+        // Fallback if a previous index.html is still cached.
         const el = document.getElementById('tp-loader-status');
         if (!el) return;
         el.textContent = message;
@@ -552,6 +557,7 @@
     function loadStandalonePayload(input, persist = true) {
         const p = unwrapPayload(input);
         if (!hasRosterPayload(p)) return false;
+        setStandaloneStatus('Processing roster…', false, true);
         try {
             // Snapshot timestamp belongs to the launcher payload, not the roster APIs.
             const rawCapturedAt = input?.capturedAt ?? input?.payload?.capturedAt;
@@ -589,5 +595,5 @@
 
     // Also accept a same-page test payload if one was placed before this script loaded.
     if (window.__TIMEPLAN_TOOLS_PAYLOAD__) loadStandalonePayload(window.__TIMEPLAN_TOOLS_PAYLOAD__);
-    else if (!restoreSnapshot()) setStandaloneStatus('Open Department Plan and launch TimePlan Tools from your Favorites bar.');
+    else if (!restoreSnapshot()) setStandaloneStatus('Ready. Waiting for your roster. Open Department Plan in TimePlan and launch TimePlan Tools from your Favorites bar.');
 })();
