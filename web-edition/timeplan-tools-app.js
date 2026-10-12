@@ -557,6 +557,8 @@
     function loadStandalonePayload(input, persist = true) {
         const p = unwrapPayload(input);
         if (!hasRosterPayload(p)) return false;
+        window.__tpRosterReceived = true;
+        if (window.__tpLaunchTimeout) clearTimeout(window.__tpLaunchTimeout);
         setStandaloneStatus('Loading your department roster…', false, true);
         // Yield one browser frame so the loading indicator becomes visible
         // before large departments are processed synchronously.
@@ -599,5 +601,5 @@
 
     // Also accept a same-page test payload if one was placed before this script loaded.
     if (window.__TIMEPLAN_TOOLS_PAYLOAD__) loadStandalonePayload(window.__TIMEPLAN_TOOLS_PAYLOAD__);
-    else if (!restoreSnapshot()) setStandaloneStatus('Ready. Waiting for your roster.');
+    else if (!restoreSnapshot() && !window.__tpLaunchedFromTimePlan) window.TimePlanLoader?.('manual', '');
 })();
