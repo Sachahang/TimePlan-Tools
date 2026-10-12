@@ -63,7 +63,7 @@
   function loadInteractiveBoardModule() {
     const module = document.createElement('script');
     module.src = './src/interactive-board/interactive-board.js?v=' + Date.now();
-    module.onload = loadAppModules;
+    module.onload = () => loadAppModules(0);
     module.onerror = function () {
       console.warn('Interactive Board module unavailable; existing board remains in the main app.');
       loadMainApplication();
