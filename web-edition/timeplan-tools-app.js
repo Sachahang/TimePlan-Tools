@@ -424,209 +424,42 @@
     });
     const { createBasicPlanMenu, createWorkerMagnet, createDropZone } = boardComponents;
 
-    // ---------- Headers / tabs ----------
-
-    function renderDayButtons(panel) {
-        const selector = document.createElement('div');
-        selector.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;margin:15px 0;padding-bottom:14px;border-bottom:2px solid #ddd;';
-        Object.keys(currentDays).sort().forEach(date => {
-            const button = document.createElement('button');
-            const selected = date === selectedDate;
-            button.textContent = formatShortDate(date);
-            button.style.cssText = `font-family:${TOOL_FONT};border:1px solid ${selected ? TP_BLUE : '#ccc'};background:${selected ? TP_BLUE : '#f3f3f3'};color:${selected ? '#fff' : '#222'};border-radius:6px;padding:8px 13px;font-size:13px;font-weight:700;cursor:pointer;`;
-            button.onclick = () => { selectedDate = date; renderPanel(); };
-            selector.appendChild(button);
-        });
-        panel.appendChild(selector);
-    }
-
-    function renderViewTabs(panel) {
-        // TimePlan Tools now has one embedded data view (Sorted View).
-        // Board Planning is the operational Interactive Board, so the second
-        // control acts as a launcher instead of rendering a duplicate board.
-        activeView = 'sorted';
-
-        const tabs = document.createElement('div');
-        tabs.style.cssText = 'display:flex;gap:8px;margin-bottom:18px;';
-
-        const sortedButton = document.createElement('button');
-        sortedButton.textContent = 'Sorted View';
-        sortedButton.style.cssText = `font-family:${TOOL_FONT};border:2px solid ${TP_BLUE};background:${TP_BLUE};color:#fff;padding:9px 16px;border-radius:7px;font-size:14px;font-weight:700;cursor:pointer;`;
-        sortedButton.onclick = () => { activeView = 'sorted'; renderPanel(); };
-        tabs.appendChild(sortedButton);
-
-        const boardAllowed = isBoardDepartment();
-        const boardButton = document.createElement('button');
-        boardButton.textContent = boardAllowed ? 'Go to Board Planning' : '🔒 Go to Board Planning';
-        boardButton.title = boardAllowed
-            ? 'Open the operational Interactive Board for the selected day'
-            : '🔒 Interactive Board is currently available only for 094-4050 Full Serve.';
-        boardButton.disabled = !boardAllowed;
-        boardButton.setAttribute('aria-disabled', String(!boardAllowed));
-        boardButton.style.cssText = boardAllowed
-            ? `font-family:${TOOL_FONT};border:2px solid ${TP_BLUE};background:#fff;color:${TP_BLUE};padding:9px 16px;border-radius:7px;font-size:14px;font-weight:700;cursor:pointer;`
-            : `font-family:${TOOL_FONT};border:2px solid #CCC;background:#F2F2F2;color:#888;padding:9px 16px;border-radius:7px;font-size:14px;font-weight:700;cursor:not-allowed;opacity:.8;`;
-        if (boardAllowed) {
-            boardButton.onclick = async () => {
-                boardButton.disabled = true;
-                const originalText = boardButton.textContent;
-                boardButton.textContent = 'Opening Board...';
-                try {
-                    await openInteractiveBoard();
-                } finally {
-                    boardButton.disabled = false;
-                    boardButton.textContent = originalText;
-                }
-            };
-        }
-        tabs.appendChild(boardButton);
-
-        panel.appendChild(tabs);
-    }
-
-    function renderDayHeader(panel, workers) {
-        const header = document.createElement('div');
-        header.style.cssText = 'display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:18px;';
-        header.innerHTML = `<div style="font-size:20px;font-weight:800;">${escapeHTML(formatDate(workers[0].start))}</div><div style="padding:5px 10px;background:#f2f2f2;border-radius:7px;font-size:13px;font-weight:700;color:#555;">${getUniqueCoworkerCount(workers)} coworkers</div>`;
-        panel.appendChild(header);
-    }
-
-    // ---------- Interactive HTML ----------
-
-    // Export snapshot preparation lives in the Interactive Board module.
-    // The complete standalone HTML template remains unchanged in this file.
-    const exportData = window.TimePlanInteractiveBoard.createExportData({
-        getBoardWorkersForSelectedDate,
-        getSelectedDate: () => selectedDate,
+    // Batch E: board export and standalone-tab orchestration live in src/app/board-controller.js.
+    const boardController = window.TimePlanAppBoardController({
+        isBoardDepartment, getBoardWorkersForSelectedDate,
+        getSelectedDate: () => selectedDate, getCurrentDays: () => currentDays,
         getSnapshotCapturedAt: () => snapshotCapturedAt,
         getNativeTimePlanFontFamily, collectPortableTimePlanFontFaceCSS,
         collectTimePlanFontFaceCSS, getTimePlanStylesheetLinksHTML,
         formatDate, formatTime, sortWorkersByStart, getWorkerKey,
         getWorkerEffectiveStart, getFunctionBadges, getFunctionNames,
         getFunctionBarBackground, getAssignmentsForSelectedDate,
-        getNotPresentForSelectedDate, BOARD_DEPARTMENT_CODE, BOARD_AREAS
+        getNotPresentForSelectedDate, BOARD_DEPARTMENT_CODE, BOARD_AREAS,
+        safeJSONStringify, escapeHTML, escapeStyleClose, TOOL_FONT, TP_BLUE, TP_LIGHT_BLUE,
+        findAreaInfo, getWorkerAssignment, isWorkerNotPresent, getCapabilityLabels,
+        buildWorkersByArea, renderCapabilityBadges, renderAbsenceIndicator,
+        getUniqueCoworkerCount, formatGeneratedTime
     });
-    const getInteractiveExportData = exportData.getInteractiveExportData;
-
-    // Standalone handover HTML generator now lives in the Interactive Board module.
-    // Its embedded CSS/JS is unchanged and stays self-contained for downloaded files.
-    const standaloneHTML = window.TimePlanInteractiveBoard.createStandaloneHTML({
-        getInteractiveExportData, safeJSONStringify, escapeHTML,
-        escapeStyleClose, TOOL_FONT, TP_BLUE, TP_LIGHT_BLUE
-    });
-    const buildInteractiveBoardHTML = standaloneHTML.buildInteractiveBoardHTML;
-
-    async function openInteractiveBoard() {
-        if (!isBoardDepartment()) return;
-        const newWindow = window.open('', '_blank', 'width=1500,height=950');
-        if (!newWindow) return alert('The browser blocked the new tab/window.');
-        newWindow.document.write('<p style="font-family:Arial;padding:24px">Preparing portable Interactive Board...</p>');
-        const html = await buildInteractiveBoardHTML();
-        newWindow.document.open();
-        newWindow.document.write(html);
-        newWindow.document.close();
-        // Give this generated board a real reloadable URL. On refresh, index.html
-        // restores the last board HTML saved in this tab's sessionStorage.
-        const boardId = 'tp-board-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
-        const recoveryKey = 'timeplan-tools-board-recovery-' + boardId;
-        try {
-            newWindow.__tpBoardRecoveryKey = recoveryKey;
-            newWindow.sessionStorage.setItem(recoveryKey, html);
-            const boardURL = new URL('./index.html', location.href);
-            boardURL.searchParams.set('tp_board', boardId);
-            newWindow.history.replaceState(null, '', boardURL.href);
-        } catch (error) {
-            console.warn('Interactive Board reload recovery could not be enabled:', error);
-        }
-    }
-
-    // Legacy in-page Board Planning renderer and its Export menu were removed.
-    // The operational board opens through openInteractiveBoard() above.
-
-    // ---------- CSV ----------
-
-    // CSV and PDF exports now live in the Interactive Board module.
-    const boardExports = window.TimePlanInteractiveBoard.createBoardExports({
-        getBoardWorkersForSelectedDate,
-        getSelectedDate: () => selectedDate,
-        getCurrentDays: () => currentDays,
-        sortWorkersByStart, findAreaInfo, getWorkerAssignment,
-        isWorkerNotPresent, getCapabilityLabels, getFunctionNames,
-        formatTime, BOARD_DEPARTMENT_CODE, buildWorkersByArea,
-        BOARD_AREAS, escapeHTML, TOOL_FONT, TP_BLUE,
-        getFunctionBarBackground, renderCapabilityBadges,
-        renderAbsenceIndicator, getUniqueCoworkerCount,
-        formatDate, formatGeneratedTime
-    });
-    const { exportBoardToCSV, exportBoardToPDF, downloadBlob } = boardExports;
+    const { openInteractiveBoard } = boardController;
 
     // ---------- Panel ----------
 
     let snapshotCapturedAt = null;
 
-    function renderPanel() {
-        document.getElementById(PANEL_ID)?.remove();
-        const dates = Object.keys(currentDays).sort();
-        if (!dates.length) return;
-        if (!selectedDate || !currentDays[selectedDate]) selectedDate = dates[0];
-        activeView = 'sorted';
+    // Batch E: the panel UI lives in src/app/app-ui.js.
+    const appUI = window.TimePlanAppUI({
+        PANEL_ID, BUTTON_ID, TP_BLUE, TOOL_FONT, BOARD_DEPARTMENT_CODE,
+        getCurrentDays: () => currentDays, getSelectedDate: () => selectedDate,
+        setSelectedDate: date => { selectedDate = date; },
+        getSnapshotCapturedAt: () => snapshotCapturedAt,
+        formatShortDate, formatDate, formatTime, escapeHTML, getUniqueCoworkerCount,
+        isBoardDepartment, openInteractiveBoard, sortWorkersByOfficialStart,
+        renderCapabilityBadges, renderFunctionBadges, getFunctionBadges,
+        normalizeHexColor, getContrastTextColor
+    });
+    function renderPanel() { return appUI.renderPanel(); }
+    function updateButtonState() { return appUI.updateButtonState(); }
 
-        const panel = document.createElement('div');
-        panel.id = PANEL_ID;
-        panel.style.cssText = `position:relative;margin:18px 24px;padding:20px;background:white;border:2px solid ${TP_BLUE};border-radius:8px;box-shadow:0 3px 14px rgba(0,0,0,.18);font-family:${TOOL_FONT};z-index:9999;color:#222;overflow-x:auto;`;
-        const top = document.createElement('div');
-        top.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
-        top.innerHTML = `<div><div style="font-size:22px;font-weight:800;color:${TP_BLUE};">TimePlan Tools</div><div style="font-size:13px;color:#666;margin-top:3px;">Department Plan</div></div>`;
-        if (snapshotCapturedAt) {
-            const stamp = document.createElement('div');
-            stamp.style.cssText = 'font-size:12px;color:#666;margin-top:5px;';
-            stamp.textContent = 'Snapshot · ' + new Intl.DateTimeFormat('en-GB', {dateStyle:'medium',timeStyle:'short'}).format(snapshotCapturedAt);
-            top.firstElementChild.appendChild(stamp);
-        }
-        panel.appendChild(top);
-        renderDayButtons(panel);
-        renderViewTabs(panel);
-        // Keep TimePlan Tools focused on the roster. The operational board
-        // opens in its own Interactive Board tab via Go to Board Planning.
-        // Prefer the extracted Sorted View module; keep the original renderer as fallback.
-        // The module receives the current date and roster on each render.
-        let sortedViewRendered = false;
-        const panelChildrenBeforeSortedView = panel.children.length;
-        if (typeof window.TimePlanSortedView === 'function') {
-            try {
-                const sortedViewModule = window.TimePlanSortedView({
-                    TP_BLUE, TOOL_FONT, BOARD_DEPARTMENT_CODE,
-                    formatTime, formatDate, escapeHTML, getUniqueCoworkerCount,
-                    renderDayHeader, sortWorkersByOfficialStart,
-                    renderCapabilityBadges, renderFunctionBadges, getFunctionBadges,
-                    normalizeHexColor, getContrastTextColor,
-                    currentDays, selectedDate
-                });
-                sortedViewModule.renderSortedView(panel);
-                sortedViewRendered = true;
-                console.info('[TimePlan Tools] Sorted View source: EXTERNAL MODULE (src/sorted-view/sorted-view.js)');
-            } catch (error) {
-                console.error('Sorted View module failed.', error);
-                // Discard partial rendering before showing an error message.
-                while (panel.children.length > panelChildrenBeforeSortedView) panel.lastElementChild.remove();
-            }
-        }
-        if (!sortedViewRendered) {
-            console.error('[TimePlan Tools] Sorted View module unavailable or failed.');
-            const warning = document.createElement('p');
-            warning.style.cssText = 'padding:12px;border:1px solid #C85B52;border-radius:6px;color:#9E2F28;background:#FFF8F7;font-weight:700;';
-            warning.textContent = 'Sorted View could not load. Refresh the page or restore the previous app version.';
-            panel.appendChild(warning);
-        }
-        document.body.insertBefore(panel, document.body.firstChild);
-        updateButtonState();
-    }
-
-    function updateButtonState() {
-        const button = document.getElementById(BUTTON_ID);
-        if (!button) return;
-        button.textContent = document.getElementById(PANEL_ID) ? 'Close TimePlan Tools' : 'TimePlan Tools';
-    }
 
     async function loadTimePlanTools() {
         const existing = document.getElementById(PANEL_ID);
