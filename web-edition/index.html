@@ -66,6 +66,25 @@
     document.body.appendChild(module);
   }
 
+  // Batch D: load Core dependencies first, preserving the existing module order.
+  const coreModules = [
+    './src/core/time-utils.js',
+    './src/core/function-utils.js',
+    './src/core/roster-processing.js'
+  ];
+  function loadCoreModule(index) {
+    if (index >= coreModules.length) return loadSortedModule();
+    const module = document.createElement('script');
+    module.src = coreModules[index] + '?v=' + Date.now();
+    module.onload = () => loadCoreModule(index + 1);
+    module.onerror = () => {
+      console.error('Could not load Core module:', coreModules[index]);
+      const status = document.getElementById('tp-loader-status');
+      if (status) status.textContent = 'Could not load TimePlan Tools Core. Refresh and try again.';
+    };
+    document.body.appendChild(module);
+  }
+  function loadSortedModule() {
   const sortedModule = document.createElement('script');
   sortedModule.src = './src/sorted-view/sorted-view.js?v=' + Date.now();
   sortedModule.onload = loadFullServeModule;
@@ -74,6 +93,8 @@
     loadFullServeModule();
   };
   document.body.appendChild(sortedModule);
+  }
+  loadCoreModule(0);
 })();
 </script>
 </body>
