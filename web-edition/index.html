@@ -42,10 +42,28 @@
     document.body.appendChild(script);
   }
 
+  // Batch E: app modules must load before the main application.
+  const appModules = [
+    './src/app/app-ui.js',
+    './src/app/board-controller.js'
+  ];
+  function loadAppModules(index = 0) {
+    if (index >= appModules.length) return loadMainApplication();
+    const module = document.createElement('script');
+    module.src = appModules[index] + '?v=' + Date.now();
+    module.onload = () => loadAppModules(index + 1);
+    module.onerror = () => {
+      console.error('Could not load App module:', appModules[index]);
+      const status = document.getElementById('tp-loader-status');
+      if (status) status.textContent = 'Could not load TimePlan Tools App. Refresh and try again.';
+    };
+    document.body.appendChild(module);
+  }
+
   function loadInteractiveBoardModule() {
     const module = document.createElement('script');
     module.src = './src/interactive-board/interactive-board.js?v=' + Date.now();
-    module.onload = loadMainApplication;
+    module.onload = loadAppModules;
     module.onerror = function () {
       console.warn('Interactive Board module unavailable; existing board remains in the main app.');
       loadMainApplication();
