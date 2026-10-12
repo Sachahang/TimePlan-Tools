@@ -13,7 +13,7 @@ h1{margin:0 0 8px;color:#0058A3;font-size:30px}
 .version{font-weight:800;color:#555;margin-bottom:16px}
 .loading-row{display:flex;align-items:center;gap:13px;min-height:26px}
 .status{font-size:16px;color:#555;line-height:1.5}
-.note{margin-top:12px;font-size:13px;color:#777;line-height:1.5}
+.note{display:none;margin-top:12px;font-size:13px;color:#777;line-height:1.5}
 .tp-spinner{width:23px;height:23px;flex:none;border:3px solid #D9E8F4;border-top-color:#0058A3;border-radius:50%;animation:tp-spin .85s linear infinite}
 #tp-loader-indicator{display:inline-flex;align-items:center;justify-content:center;width:23px;height:23px;flex:none}
 .tp-spinner.is-hidden{display:none}
@@ -24,6 +24,7 @@ h1{margin:0 0 8px;color:#0058A3;font-size:30px}
 @keyframes tp-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.tp-spinner{animation:none;border-color:#0058A3 #D9E8F4 #D9E8F4 #D9E8F4}}
 @media(max-width:600px){.loader{margin:65px auto;padding:0 16px}.card{padding:24px 20px}h1{font-size:27px}}
+#tp-loader-card[data-state="ready"] .note{display:block}
 </style>
 </head>
 <body>
@@ -77,7 +78,7 @@ h1{margin:0 0 8px;color:#0058A3;font-size:30px}
       // Otherwise, the page is ready and waiting for the bookmarklet.
       // App owns its status once initialized; avoid overwriting a real error.
       const card = document.getElementById('tp-loader-card');
-      if (card && card.dataset.state === 'loading') {
+      if (card && card.dataset.state === 'loading' && document.getElementById('tp-loader-status')?.textContent === 'Starting TimePlan Tools…') {
         setLoaderStatus('Ready. Waiting for your roster.', false, true);
       }
     };
