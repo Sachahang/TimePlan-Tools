@@ -557,7 +557,10 @@
     function loadStandalonePayload(input, persist = true) {
         const p = unwrapPayload(input);
         if (!hasRosterPayload(p)) return false;
-        setStandaloneStatus('Processing roster…', false, true);
+        setStandaloneStatus('Loading your department roster…', false, true);
+        // Yield one browser frame so the loading indicator becomes visible
+        // before large departments are processed synchronously.
+        requestAnimationFrame(() => setTimeout(() => {
         try {
             // Snapshot timestamp belongs to the launcher payload, not the roster APIs.
             const rawCapturedAt = input?.capturedAt ?? input?.payload?.capturedAt;
@@ -573,17 +576,18 @@
             const dates = Object.keys(currentDays).sort();
             if (!dates.length) throw new Error('No scheduled coworkers found in the received roster.');
             if (!selectedDate || !currentDays[selectedDate]) selectedDate = dates[0];
-            document.getElementById('tp-loader-card')?.remove();
+            setStandaloneStatus('Preparing Sorted View…', false, true);
             document.body.style.margin = '0';
             document.body.style.background = '#F3F4F5';
             renderPanel();
+            document.getElementById('tp-loader-card')?.remove();
             if (persist) saveSnapshot(input);
-            return true;
         } catch (error) {
             console.error('TimePlan Tools standalone payload error:', error);
             setStandaloneStatus('Could not process TimePlan roster: ' + (error?.message || error), true);
-            return true;
         }
+        }, 0));
+        return true;
     }
 
     window.addEventListener('message', event => {
@@ -595,5 +599,5 @@
 
     // Also accept a same-page test payload if one was placed before this script loaded.
     if (window.__TIMEPLAN_TOOLS_PAYLOAD__) loadStandalonePayload(window.__TIMEPLAN_TOOLS_PAYLOAD__);
-    else if (!restoreSnapshot()) setStandaloneStatus('Ready. Waiting for your roster. Open Department Plan in TimePlan and launch TimePlan Tools from your Favorites bar.');
+    else if (!restoreSnapshot()) setStandaloneStatus('Ready. Waiting for your roster.');
 })();
