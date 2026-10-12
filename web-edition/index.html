@@ -5,15 +5,39 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>TimePlan Tools</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#f3f4f5;color:#222;font-family:Arial,Helvetica,sans-serif}.loader{max-width:900px;margin:110px auto;padding:0 24px}.card{background:#fff;border:2px solid #0058A3;border-radius:10px;padding:28px 32px;box-shadow:0 4px 18px rgba(0,0,0,.12)}h1{margin:0 0 8px;color:#0058A3;font-size:30px}.version{font-weight:800;color:#555;margin-bottom:16px}.status{font-size:16px;color:#555}.note{margin-top:12px;font-size:13px;color:#777}
+*{box-sizing:border-box}
+body{margin:0;background:#f3f4f5;color:#222;font-family:Arial,Helvetica,sans-serif}
+.loader{max-width:900px;margin:110px auto;padding:0 24px}
+.card{background:#fff;border:2px solid #0058A3;border-radius:10px;padding:28px 32px;box-shadow:0 4px 18px rgba(0,0,0,.12)}
+h1{margin:0 0 8px;color:#0058A3;font-size:30px}
+.version{font-weight:800;color:#555;margin-bottom:16px}
+.loading-row{display:flex;align-items:center;gap:13px;min-height:26px}
+.status{font-size:16px;color:#555;line-height:1.5}
+.note{margin-top:12px;font-size:13px;color:#777;line-height:1.5}
+.tp-spinner{width:23px;height:23px;flex:none;border:3px solid #D9E8F4;border-top-color:#0058A3;border-radius:50%;animation:tp-spin .85s linear infinite}
+.tp-spinner.is-hidden{display:none}
+@keyframes tp-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.tp-spinner{animation:none;border-color:#0058A3 #D9E8F4 #D9E8F4 #D9E8F4}}
+@media(max-width:600px){.loader{margin:65px auto;padding:0 16px}.card{padding:24px 20px}h1{font-size:27px}}
 </style>
 </head>
 <body>
-<div class="loader" id="tp-loader-card"><div class="card"><h1>TimePlan Tools</h1><div class="version">Department Plan</div><div class="status" id="tp-loader-status">Ready to load your roster…</div><div class="note">Open Department Plan in TimePlan, then select the TimePlan Tools favorite.</div></div></div>
+<div class="loader" id="tp-loader-card"><div class="card"><h1>TimePlan Tools</h1><div class="version">Department Plan</div><div class="loading-row" role="status" aria-live="polite"><span class="tp-spinner" id="tp-loader-spinner" aria-hidden="true"></span><span class="status" id="tp-loader-status">Loading TimePlan Tools…</span></div><div class="note">Open Department Plan in TimePlan, then select the TimePlan Tools favorite.</div></div></div>
 <script>
 /* Always request the latest published application code on each page load.
    The bookmarklet and saved roster snapshot remain unchanged. */
 (function () {
+  // Loader only: no changes to the launcher, roster processing or board recovery.
+  function setLoaderStatus(message, isError = false, isWaiting = false) {
+    const status = document.getElementById('tp-loader-status');
+    const spinner = document.getElementById('tp-loader-spinner');
+    if (status) {
+      status.textContent = message;
+      status.style.color = isError ? '#B42318' : '#555';
+    }
+    if (spinner) spinner.classList.toggle('is-hidden', isError || isWaiting);
+  }
+
   // When a generated Interactive Board is refreshed, restore the board
   // instead of displaying a blank tab or the normal roster loader.
   const boardId = new URLSearchParams(location.search).get('tp_board');
@@ -29,16 +53,22 @@
     }
     const status = document.getElementById('tp-loader-status');
     if (status) status.textContent = 'This Board snapshot is no longer available in this tab. Reopen it from TimePlan Tools.';
+    document.getElementById('tp-loader-spinner')?.classList.add('is-hidden');
     return;
   }
   // Load the modules in order before the main application.
   function loadMainApplication() {
+    setLoaderStatus('Starting TimePlan Tools…');
     const script = document.createElement('script');
     script.src = './timeplan-tools-app.js?v=' + Date.now();
-    script.onerror = function () {
-      const status = document.getElementById('tp-loader-status');
-      if (status) status.textContent = 'Could not load TimePlan Tools. Check your connection and try again.';
+    script.onload = () => {
+      // The app removes this card itself when a roster arrives.
+      // Otherwise, the page is ready and waiting for the bookmarklet.
+      if (document.getElementById('tp-loader-card')) {
+        setLoaderStatus('Ready to receive your roster.', false, true);
+      }
     };
+    script.onerror = () => setLoaderStatus('Could not load TimePlan Tools. Check your connection and try again.', true);
     document.body.appendChild(script);
   }
 
@@ -49,18 +79,19 @@
   ];
   function loadAppModules(index = 0) {
     if (index >= appModules.length) return loadMainApplication();
+    setLoaderStatus('Loading application modules…');
     const module = document.createElement('script');
     module.src = appModules[index] + '?v=' + Date.now();
     module.onload = () => loadAppModules(index + 1);
     module.onerror = () => {
       console.error('Could not load App module:', appModules[index]);
-      const status = document.getElementById('tp-loader-status');
-      if (status) status.textContent = 'Could not load TimePlan Tools App. Refresh and try again.';
+      setLoaderStatus('Could not load TimePlan Tools App. Refresh and try again.', true);
     };
     document.body.appendChild(module);
   }
 
   function loadInteractiveBoardModule() {
+    setLoaderStatus('Loading Interactive Board…');
     const module = document.createElement('script');
     module.src = './src/interactive-board/interactive-board.js?v=' + Date.now();
     module.onload = () => loadAppModules(0);
@@ -72,14 +103,14 @@
   }
 
   function loadFullServeModule() {
+    setLoaderStatus('Loading department configuration…');
     const module = document.createElement('script');
     module.src = './src/departments/full-serve.js?v=' + Date.now();
     module.onload = loadInteractiveBoardModule;
     // Full Serve configuration is required by the main application.
     module.onerror = function () {
       console.error('Full Serve configuration module unavailable.');
-      const status = document.getElementById('tp-loader-status');
-      if (status) status.textContent = 'Could not load Full Serve configuration. Refresh and try again.';
+      setLoaderStatus('Could not load Full Serve configuration. Refresh and try again.', true);
     };
     document.body.appendChild(module);
   }
@@ -92,17 +123,18 @@
   ];
   function loadCoreModule(index) {
     if (index >= coreModules.length) return loadSortedModule();
+    setLoaderStatus('Loading roster processing modules…');
     const module = document.createElement('script');
     module.src = coreModules[index] + '?v=' + Date.now();
     module.onload = () => loadCoreModule(index + 1);
     module.onerror = () => {
       console.error('Could not load Core module:', coreModules[index]);
-      const status = document.getElementById('tp-loader-status');
-      if (status) status.textContent = 'Could not load TimePlan Tools Core. Refresh and try again.';
+      setLoaderStatus('Could not load TimePlan Tools Core. Refresh and try again.', true);
     };
     document.body.appendChild(module);
   }
   function loadSortedModule() {
+  setLoaderStatus('Loading Sorted View…');
   const sortedModule = document.createElement('script');
   sortedModule.src = './src/sorted-view/sorted-view.js?v=' + Date.now();
   sortedModule.onload = loadFullServeModule;
