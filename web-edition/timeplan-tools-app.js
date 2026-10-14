@@ -482,7 +482,6 @@
             const functionMap = buildFunctionMap(settingsJSON);
             snapshotCapturedAt = new Date();
             currentDays = buildDays(employees, absences, functionMap, trainingActivities);
-            const processingFinishedAt = performance.now();
             const dates = Object.keys(currentDays).sort();
             if (!dates.length) { alert('No scheduled coworkers found.'); return; }
             if (!selectedDate || !currentDays[selectedDate]) selectedDate = dates[0];
@@ -607,6 +606,7 @@
             setStandaloneStatus('Preparing Sorted View…', false, true);
             document.body.style.margin = '0';
             document.body.style.background = '#F3F4F5';
+            const processingFinishedAt = performance.now();
             const renderStartedAt = performance.now();
             renderPanel();
             const renderFinishedAt = performance.now();
