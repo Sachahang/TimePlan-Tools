@@ -554,15 +554,37 @@
         return p.worktimes != null && p.absences != null && p.settings != null;
     }
 
+    // Batch F.6: the bookmarklet retries postMessage until the app is ready.
+    // All retries from one launch carry the same capturedAt + department.
+    // Claim the key BEFORE scheduling work so pending animation frames cannot
+    // queue the same expensive roster processing repeatedly.
+    const acceptedRosterKeys = new Set();
+    let rosterProcessingGeneration = 0;
+    function getRosterDeliveryKey(input, p) {
+        const capturedAt = input?.capturedAt ?? input?.payload?.capturedAt;
+        if (typeof capturedAt !== 'string' || !capturedAt.trim()) return null;
+        return JSON.stringify([capturedAt, p.department]);
+    }
+
     function loadStandalonePayload(input, persist = true) {
         const p = unwrapPayload(input);
         if (!hasRosterPayload(p)) return false;
+        const deliveryKey = getRosterDeliveryKey(input, p);
+        if (deliveryKey && acceptedRosterKeys.has(deliveryKey)) return true;
+        if (deliveryKey) {
+            acceptedRosterKeys.add(deliveryKey);
+            // Keep only a small history; a genuinely new capturedAt is allowed.
+            if (acceptedRosterKeys.size > 12) acceptedRosterKeys.delete(acceptedRosterKeys.values().next().value);
+        }
+        const generation = ++rosterProcessingGeneration;
         window.__tpRosterReceived = true;
         if (window.__tpLaunchTimeout) clearTimeout(window.__tpLaunchTimeout);
         setStandaloneStatus('Loading your department roster…', false, true);
         // Yield one browser frame so the loading indicator becomes visible
         // before large departments are processed synchronously.
         requestAnimationFrame(() => setTimeout(() => {
+        // A newer, different roster arrived before this task started.
+        if (generation !== rosterProcessingGeneration) return;
         try {
             // Snapshot timestamp belongs to the launcher payload, not the roster APIs.
             const rawCapturedAt = input?.capturedAt ?? input?.payload?.capturedAt;
@@ -585,6 +607,8 @@
             document.getElementById('tp-loader-card')?.remove();
             if (persist) saveSnapshot(input);
         } catch (error) {
+            // Allow a later retry if processing genuinely failed.
+            if (deliveryKey) acceptedRosterKeys.delete(deliveryKey);
             console.error('TimePlan Tools standalone payload error:', error);
             setStandaloneStatus('Could not process TimePlan roster: ' + (error?.message || error), true);
         }
