@@ -482,6 +482,7 @@
             const functionMap = buildFunctionMap(settingsJSON);
             snapshotCapturedAt = new Date();
             currentDays = buildDays(employees, absences, functionMap, trainingActivities);
+            const processingFinishedAt = performance.now();
             const dates = Object.keys(currentDays).sort();
             if (!dates.length) { alert('No scheduled coworkers found.'); return; }
             if (!selectedDate || !currentDays[selectedDate]) selectedDate = dates[0];
@@ -576,6 +577,8 @@
             // Keep only a small history; a genuinely new capturedAt is allowed.
             if (acceptedRosterKeys.size > 12) acceptedRosterKeys.delete(acceptedRosterKeys.values().next().value);
         }
+        const receivedAt = performance.now();
+        const receivedWallTime = Date.now();
         const generation = ++rosterProcessingGeneration;
         window.__tpRosterReceived = true;
         if (window.__tpLaunchTimeout) clearTimeout(window.__tpLaunchTimeout);
@@ -586,6 +589,7 @@
         // A newer, different roster arrived before this task started.
         if (generation !== rosterProcessingGeneration) return;
         try {
+            const processingStartedAt = performance.now();
             // Snapshot timestamp belongs to the launcher payload, not the roster APIs.
             const rawCapturedAt = input?.capturedAt ?? input?.payload?.capturedAt;
             snapshotCapturedAt = rawCapturedAt && !Number.isNaN(Date.parse(rawCapturedAt))
@@ -603,8 +607,16 @@
             setStandaloneStatus('Preparing Sorted View…', false, true);
             document.body.style.margin = '0';
             document.body.style.background = '#F3F4F5';
+            const renderStartedAt = performance.now();
             renderPanel();
+            const renderFinishedAt = performance.now();
             document.getElementById('tp-loader-card')?.remove();
+            const launch = input?.launchDiagnostics ?? input?.payload?.launchDiagnostics;
+            const metrics = {department:p.department,apiMs:launch?.totalApiMs ?? 'not available',settingsMs:launch?.settingsMs ?? 'not available',departmentResolveMs:launch?.departmentResolveMs ?? 'not available',firstSendToReceiveMs:launch?.apiReadyAt ? Math.max(0,receivedWallTime-launch.apiReadyAt) : 'not available',processingMs:Math.round(processingFinishedAt-processingStartedAt),renderMs:Math.round(renderFinishedAt-renderStartedAt),receiverTotalMs:Math.round(renderFinishedAt-receivedAt),launchToReadyMs:launch?.startedAt ? Math.max(0,Date.now()-launch.startedAt) : 'not available',fastPath:launch?.fastPath ?? 'not available'};
+            window.__tpLaunchDiagnostics = metrics;
+            console.group('[TimePlan Tools F.8] Launch Performance');
+            console.table(metrics);
+            console.groupEnd();
             if (persist) saveSnapshot(input);
         } catch (error) {
             // Allow a later retry if processing genuinely failed.
