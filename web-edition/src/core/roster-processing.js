@@ -127,7 +127,7 @@
         return /(?:^|\b)(oplæring|oplaering|training)(?:\b|$)/i.test(text);
     }
 
-    // F.14.2: All partial absences are annotations, regardless of reason.
+    // F.14.3: Working exceptions stay visible; only meetings generate ABS among them.
     // Only full-shift absences outside these explicit working exceptions hide a coworker.
     function isWorkingException(absence) {
         const text = getAbsenceActivityText(absence);
@@ -253,10 +253,13 @@
                     isFullShiftAbsence(absence, worktime) && !isWorkingException(absence)
                 )) return;
 
-                // Partial absences always appear as ABS; full-day internal meetings
-                // also appear as ABS. Training/Ansvarstid are not absence labels.
+                // Meetings show ABS for their actual interval (even if all day).
+                // Oplæring, Ansvarstid and Til rådighed are working activities,
+                // so they must never generate ABS, including partial intervals.
+                // Other partial absences continue to show ABS as before.
                 const annotated = overlapping.filter(absence =>
-                    (!isFullShiftAbsence(absence, worktime)) || isMeeting(absence)
+                    isMeeting(absence) ||
+                    (!isWorkingException(absence) && !isFullShiftAbsence(absence, worktime))
                 );
                 const relevantAbsences = getRelevantAbsencesForWorktime(
                     worktime, employee.employee_id, annotated
