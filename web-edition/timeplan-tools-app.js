@@ -570,11 +570,18 @@
     // so even older bookmarklets that open the current app can see the notice.
     // Older launchers do not report a reliable version; this is a campaign notice,
     // NOT a claim that the user's installed launcher was version-checked.
-    function showLauncherUpdateNotice() {
+    function showLauncherUpdateNotice(input) {
+        // Unversioned legacy launchers still receive the update notice.
+        // F.16.2 explicitly identifies itself in each fresh roster payload.
+        const launcherVersion = input?.launcherVersion ?? input?.payload?.launcherVersion;
+        if (launcherVersion === 'F.16.2') {
+            document.getElementById('tp-launcher-update-notice')?.remove();
+            return;
+        }
         if (!window.__tpLaunchedFromTimePlan || document.getElementById('tp-launcher-update-notice')) return;
         const campaign = 'f16-launcher-refresh-2026-10';
         const key = 'tp-launcher-update-notice-' + campaign;
-        const snoozeMs = 7 * 24 * 60 * 60 * 1000;
+        const snoozeMs = 24 * 60 * 60 * 1000;
         try {
             const lastDismissed = Number(localStorage.getItem(key) || 0);
             if (lastDismissed && Date.now() - lastDismissed < snoozeMs) return;
@@ -657,7 +664,7 @@
             renderPanel();
             const renderFinishedAt = performance.now();
             document.getElementById('tp-loader-card')?.remove();
-            showLauncherUpdateNotice();
+            showLauncherUpdateNotice(input);
             const launch = input?.launchDiagnostics ?? input?.payload?.launchDiagnostics;
             const metrics = {department:p.department,apiMs:launch?.totalApiMs ?? 'not available',settingsMs:launch?.settingsMs ?? 'not available',departmentResolveMs:launch?.departmentResolveMs ?? 'not available',firstSendToReceiveMs:launch?.apiReadyAt ? Math.max(0,receivedWallTime-launch.apiReadyAt) : 'not available',processingMs:Math.round(processingFinishedAt-processingStartedAt),renderMs:Math.round(renderFinishedAt-renderStartedAt),receiverTotalMs:Math.round(renderFinishedAt-receivedAt),launchToReadyMs:launch?.startedAt ? Math.max(0,Date.now()-launch.startedAt) : 'not available',fastPath:launch?.fastPath ?? 'not available'};
             window.__tpLaunchDiagnostics = metrics;
