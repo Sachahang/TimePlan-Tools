@@ -360,8 +360,7 @@
 
     function renderAbsenceIndicator(worker, compact = false) {
         const segments = worker.absenceSegments || [];
-        const notes = (worker.allDayAbsenceNotes || []).map(note => `<div style="margin-top:3px;color:#6A5B38;font-size:${compact ? '9px' : '11px'};font-weight:700;">ⓘ Absence: ${escapeHTML(note)} · All day</div>`).join('');
-        if (!segments.length) return notes;
+        if (!segments.length) return '';
 
         const marginTop = compact ? '3px' : '4px';
         const labelSize = compact ? '9px' : '10px';
@@ -372,7 +371,7 @@
             <span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">
                 <span style="display:inline-flex;align-items:center;justify-content:center;padding:${padding};border:1px solid #C85B52;border-radius:4px;background:#FFF8F7;color:#9E2F28;font-size:${labelSize};font-weight:900;letter-spacing:.25px;line-height:1.2;">ABS</span>
                 <span style="color:#8A4B47;font-size:${timeSize};font-weight:750;line-height:1.2;">${formatTime(segment.start)}&ndash;${formatTime(segment.end)}</span>
-            </span>`).join('')}</div>` + notes;
+            </span>`).join('')}</div>`;
     }
 
     // Sorted View rendering and PDF export live in src/sorted-view/sorted-view.js.
@@ -482,7 +481,7 @@
             const absences = buildUnavailableAbsences(rawAbsences);
             const functionMap = buildFunctionMap(settingsJSON);
             snapshotCapturedAt = new Date();
-            currentDays = buildDays(employees, absences, functionMap, trainingActivities, rawAbsences);
+            currentDays = buildDays(employees, absences, functionMap, trainingActivities);
             const dates = Object.keys(currentDays).sort();
             if (!dates.length) { alert('No scheduled coworkers found.'); return; }
             if (!selectedDate || !currentDays[selectedDate]) selectedDate = dates[0];
@@ -567,6 +566,52 @@
         return JSON.stringify([capturedAt, p.department]);
     }
 
+    // F.16 — Launcher update notice. This code lives in the GitHub Pages app,
+    // so even older bookmarklets that open the current app can see the notice.
+    // Older launchers do not report a reliable version; this is a campaign notice,
+    // NOT a claim that the user's installed launcher was version-checked.
+    function showLauncherUpdateNotice() {
+        if (!window.__tpLaunchedFromTimePlan || document.getElementById('tp-launcher-update-notice')) return;
+        const campaign = 'f16-launcher-refresh-2026-10';
+        const key = 'tp-launcher-update-notice-' + campaign;
+        const snoozeMs = 7 * 24 * 60 * 60 * 1000;
+        try {
+            const lastDismissed = Number(localStorage.getItem(key) || 0);
+            if (lastDismissed && Date.now() - lastDismissed < snoozeMs) return;
+        } catch (_) { /* Storage may be disabled; show the notice anyway. */ }
+
+        const notice = document.createElement('aside');
+        notice.id = 'tp-launcher-update-notice';
+        notice.setAttribute('role', 'status');
+        notice.setAttribute('aria-label', 'TimePlan Tools launcher update');
+        notice.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:2147483000;box-sizing:border-box;max-width:min(370px,calc(100vw - 36px));padding:17px 18px;background:#fff;color:#202124;border:1px solid #dce1e6;border-left:4px solid #1768b0;border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.19);font:14px/1.45 Arial,sans-serif;text-align:left;';
+        const heading = document.createElement('div');
+        heading.textContent = '🔄 TimePlan Tools — Launcher update';
+        heading.style.cssText = 'font-weight:700;font-size:15px;margin-bottom:7px;';
+        const description = document.createElement('p');
+        description.textContent = 'A new update is available! Please reinstall your bookmarklet to get the latest improvements.';
+        description.style.cssText = 'margin:0 0 13px;';
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;';
+        const update = document.createElement('a');
+        update.href = './update.html';
+        update.target = '_blank';
+        update.rel = 'noopener noreferrer';
+        update.textContent = 'Update now ↗';
+        update.style.cssText = 'background:#1768b0;color:white;text-decoration:none;padding:8px 11px;border-radius:6px;font-weight:700;';
+        const later = document.createElement('button');
+        later.type = 'button';
+        later.textContent = 'Remind me later';
+        later.style.cssText = 'background:transparent;color:#444;border:0;cursor:pointer;padding:8px 2px;font:inherit;text-decoration:underline;';
+        later.addEventListener('click', () => {
+            try { localStorage.setItem(key, String(Date.now())); } catch (_) {}
+            notice.remove();
+        });
+        actions.append(update, later);
+        notice.append(heading, description, actions);
+        document.body.appendChild(notice);
+    }
+
     function loadStandalonePayload(input, persist = true) {
         const p = unwrapPayload(input);
         if (!hasRosterPayload(p)) return false;
@@ -600,7 +645,7 @@
             const trainingActivities = rawAbsences.filter(isTrainingActivity);
             const absences = buildUnavailableAbsences(rawAbsences);
             const functionMap = buildFunctionMap(p.settings);
-            currentDays = buildDays(employees, absences, functionMap, trainingActivities, rawAbsences);
+            currentDays = buildDays(employees, absences, functionMap, trainingActivities);
             const dates = Object.keys(currentDays).sort();
             if (!dates.length) throw new Error('No scheduled coworkers found in the received roster.');
             if (!selectedDate || !currentDays[selectedDate]) selectedDate = dates[0];
@@ -612,6 +657,7 @@
             renderPanel();
             const renderFinishedAt = performance.now();
             document.getElementById('tp-loader-card')?.remove();
+            showLauncherUpdateNotice();
             const launch = input?.launchDiagnostics ?? input?.payload?.launchDiagnostics;
             const metrics = {department:p.department,apiMs:launch?.totalApiMs ?? 'not available',settingsMs:launch?.settingsMs ?? 'not available',departmentResolveMs:launch?.departmentResolveMs ?? 'not available',firstSendToReceiveMs:launch?.apiReadyAt ? Math.max(0,receivedWallTime-launch.apiReadyAt) : 'not available',processingMs:Math.round(processingFinishedAt-processingStartedAt),renderMs:Math.round(renderFinishedAt-renderStartedAt),receiverTotalMs:Math.round(renderFinishedAt-receivedAt),launchToReadyMs:launch?.startedAt ? Math.max(0,Date.now()-launch.startedAt) : 'not available',fastPath:launch?.fastPath ?? 'not available'};
             window.__tpLaunchDiagnostics = metrics;
