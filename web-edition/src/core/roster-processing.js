@@ -127,49 +127,33 @@
         return /(?:^|\b)(oplæring|oplaering|training)(?:\b|$)/i.test(text);
     }
 
-    // F.14: interpret the operational effect, not a private absence reason.
-    function classifyAbsence(absence) {
+    // F.14.2: All partial absences are annotations, regardless of reason.
+    // Only full-shift absences outside these explicit working exceptions hide a coworker.
+    function isWorkingException(absence) {
         const text = getAbsenceActivityText(absence);
-        if (/(?:^|\b)(ansvarstid)(?:\b|$)/i.test(text)) return 'working';
-        if (isTrainingActivity(absence)) return 'working';
-        if (/(?:øvrigt\s+fravær|ovrigt\s+fravaer|other\s+absences?)/i.test(text)) return 'unavailable';
-        // Preserve the pre-F.14 handling of partial absences, including meetings.
-        if (absence.allday !== true && absence.physicallyPresent === false) return 'unavailable';
-        // Unknown all-day categories must NOT silently hide a scheduled worker.
-        return 'information';
+        return isTrainingActivity(absence) || /ansvarstid|internt\s+møde|internt\s+moede|til\s+r[aå]dighed(?:\s*[-–]\s*available)?/i.test(text);
     }
 
-    function getAbsenceDisplayName(absence) {
-        // Read human-facing category fields only; do not expose arbitrary metadata.
-        const keys = ['name', 'title', 'text', 'description', 'label', 'activity_name',
-            'activityName', 'absence_name', 'absenceName', 'type_name', 'typeName'];
-        const visited = new Set();
-        function find(value, depth = 0) {
-            if (!value || typeof value !== 'object' || visited.has(value) || depth > 4) return '';
-            visited.add(value);
-            for (const key of keys) {
-                if (typeof value[key] === 'string' && value[key].trim()) return value[key].trim();
-            }
-            for (const key of ['activity', 'absence', 'absenceType', 'type', 'reason']) {
-                const child = value[key];
-                if (typeof child === 'string' && child.trim()) return child.trim();
-                const nested = find(child, depth + 1);
-                if (nested) return nested;
-            }
-            return '';
-        }
-        const explicit = find(absence);
-        if (explicit) return explicit;
-        const text = getAbsenceActivityText(absence);
-        if (/ansvarstid/i.test(text)) return 'Ansvarstid';
-        if (/oplæring|oplaering|training/i.test(text)) return 'Oplæring';
-        return 'Information (category not provided)';
+    function isMeeting(absence) {
+        return /internt\s+møde|internt\s+moede/i.test(getAbsenceActivityText(absence));
+    }
+
+    function overlapsShift(absence, worktime) {
+        return absence.from < worktime.end_time && absence.to > worktime.start_time;
+    }
+
+    function coversShift(absence, worktime) {
+        return absence.from <= worktime.start_time && absence.to >= worktime.end_time;
+    }
+
+    function isFullShiftAbsence(absence, worktime) {
+        return absence.allday === true || coversShift(absence, worktime);
     }
 
     function buildUnavailableAbsences(absences) {
+        // Keep raw records: full-vs-partial is assessed against each individual shift.
         return absences.filter(absence =>
-            absence.employeeid !== undefined && absence.from && absence.to &&
-            classifyAbsence(absence) === 'unavailable'
+            absence.employeeid !== undefined && absence.from && absence.to
         );
     }
 
@@ -260,45 +244,41 @@
                 const date = getDateKey(worktime.start_time);
                 if (!date) return;
 
-                const relevantAbsences = getRelevantAbsencesForWorktime(
-                    worktime,
-                    employee.employee_id,
-                    absences
+                const overlapping = absences.filter(absence =>
+                    String(absence.employeeid) === String(employee.employee_id) &&
+                    overlapsShift(absence, worktime)
                 );
+                // Exclude a full-day non-exception, even if TimePlan still has working hours.
+                if (overlapping.some(absence =>
+                    isFullShiftAbsence(absence, worktime) && !isWorkingException(absence)
+                )) return;
 
+                // Partial absences always appear as ABS; full-day internal meetings
+                // also appear as ABS. Training/Ansvarstid are not absence labels.
+                const annotated = overlapping.filter(absence =>
+                    (!isFullShiftAbsence(absence, worktime)) || isMeeting(absence)
+                );
+                const relevantAbsences = getRelevantAbsencesForWorktime(
+                    worktime, employee.employee_id, annotated
+                );
                 const isTraining = trainingActivities.some(activity =>
                     String(activity.employeeid) === String(employee.employee_id) &&
-                    activity.from < worktime.end_time &&
-                    activity.to > worktime.start_time
+                    overlapsShift(activity, worktime)
                 );
-
-                // Keep one row/magnet per logical TimePlan shift. Absences only annotate
-                // that original shift. A full-day absence, or any combination of
-                // absences that leaves no effective working time, removes the shift.
+                // If multiple partial absences jointly cover the entire shift,
+                // there is no actual availability, but keep it as an annotated shift
+                // per the agreed partial-absence rule.
                 const effectiveBlocks = subtractAbsencesFromWorktime(
-                    worktime,
-                    employee.employee_id,
-                    absences
+                    worktime, employee.employee_id, annotated
                 );
-
-                if (!effectiveBlocks.length) return;
-                // Exclude only when known unavailable intervals cover the entire shift.
-                // All-day working/informational categories never enter `absences`.
-                const fullDayNotes = rawAbsences.filter(absence =>
-                    String(absence.employeeid) === String(employee.employee_id) &&
-                    absence.allday === true && absence.from < worktime.end_time &&
-                    absence.to > worktime.start_time &&
-                    classifyAbsence(absence) !== 'unavailable'
-                ).map(absence => getAbsenceDisplayName(absence));
 
                 (days[date] ||= []).push({
                     name: employee.employee_name || 'Unknown',
                     employeeId: employee.employee_id,
                     start: worktime.start_time,
                     end: worktime.end_time,
-                    effectiveStart: effectiveBlocks[0].start_time,
+                    effectiveStart: effectiveBlocks.length ? effectiveBlocks[0].start_time : worktime.start_time,
                     training: isTraining,
-                    allDayAbsenceNotes: [...new Set(fullDayNotes)],
                     functionSegments: getFunctionSegments(worktime, functionMap),
                     absenceSegments: relevantAbsences.map(absence => ({
                         start: absence.start,
@@ -311,6 +291,6 @@
         return days;
     }
 
-        return { normalizeWorktimesResponse, normalizeAbsenceResponse, mergeContiguousWorktimes, mergeFunctionSegments, getFunctionSegments, getAbsenceActivityText, isTrainingActivity, classifyAbsence, getAbsenceDisplayName, buildUnavailableAbsences, maxTimestamp, minTimestamp, clipWorktimeDetails, subtractAbsencesFromWorktime, getRelevantAbsencesForWorktime, buildDays };
+        return { normalizeWorktimesResponse, normalizeAbsenceResponse, mergeContiguousWorktimes, mergeFunctionSegments, getFunctionSegments, getAbsenceActivityText, isTrainingActivity, isWorkingException, isMeeting, isFullShiftAbsence, buildUnavailableAbsences, maxTimestamp, minTimestamp, clipWorktimeDetails, subtractAbsencesFromWorktime, getRelevantAbsencesForWorktime, buildDays };
     };
 })();
