@@ -569,7 +569,7 @@
     // F.16.3 — Exact launcher-version matching, including unversioned legacy bookmarks.
     // Change this constant ONLY when a newly published bookmarklet must be reinstalled.
     // App-only updates do not require changing it.
-    const CURRENT_LAUNCHER_VERSION = 'F.16.2';
+    const CURRENT_LAUNCHER_VERSION = 'F.16.4';
     const LAUNCHER_REMINDER_MS = 24 * 60 * 60 * 1000;
 
     function showLauncherUpdateNotice(input) {
@@ -671,7 +671,7 @@
             const launch = input?.launchDiagnostics ?? input?.payload?.launchDiagnostics;
             const metrics = {department:p.department,apiMs:launch?.totalApiMs ?? 'not available',settingsMs:launch?.settingsMs ?? 'not available',departmentResolveMs:launch?.departmentResolveMs ?? 'not available',firstSendToReceiveMs:launch?.apiReadyAt ? Math.max(0,receivedWallTime-launch.apiReadyAt) : 'not available',processingMs:Math.round(processingFinishedAt-processingStartedAt),renderMs:Math.round(renderFinishedAt-renderStartedAt),receiverTotalMs:Math.round(renderFinishedAt-receivedAt),launchToReadyMs:launch?.startedAt ? Math.max(0,Date.now()-launch.startedAt) : 'not available',fastPath:launch?.fastPath ?? 'not available'};
             window.__tpLaunchDiagnostics = metrics;
-            console.group('[TimePlan Tools F.8] Launch Performance');
+            console.group('[TimePlan Tools] Launch Performance');
             console.table(metrics);
             console.groupEnd();
             if (persist) saveSnapshot(input);
