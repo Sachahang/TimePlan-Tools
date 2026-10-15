@@ -566,25 +566,28 @@
         return JSON.stringify([capturedAt, p.department]);
     }
 
-    // F.16 — Launcher update notice. This code lives in the GitHub Pages app,
-    // so even older bookmarklets that open the current app can see the notice.
-    // Older launchers do not report a reliable version; this is a campaign notice,
-    // NOT a claim that the user's installed launcher was version-checked.
+    // F.16.3 — Exact launcher-version matching, including unversioned legacy bookmarks.
+    // Change this constant ONLY when a newly published bookmarklet must be reinstalled.
+    // App-only updates do not require changing it.
+    const CURRENT_LAUNCHER_VERSION = 'F.16.2';
+    const LAUNCHER_REMINDER_MS = 24 * 60 * 60 * 1000;
+
     function showLauncherUpdateNotice(input) {
-        // Unversioned legacy launchers still receive the update notice.
-        // F.16.2 explicitly identifies itself in each fresh roster payload.
+        // The launcher version must come from the actual roster payload.
+        // Legacy bookmarklets omit it, which intentionally counts as a mismatch.
         const launcherVersion = input?.launcherVersion ?? input?.payload?.launcherVersion;
-        if (launcherVersion === 'F.16.2') {
+        if (launcherVersion === CURRENT_LAUNCHER_VERSION) {
             document.getElementById('tp-launcher-update-notice')?.remove();
             return;
         }
         if (!window.__tpLaunchedFromTimePlan || document.getElementById('tp-launcher-update-notice')) return;
-        const campaign = 'f16-launcher-refresh-2026-10';
-        const key = 'tp-launcher-update-notice-' + campaign;
-        const snoozeMs = 24 * 60 * 60 * 1000;
+
+        // A snooze belongs to one target version, not all future releases.
+        // A future F.17 therefore shows immediately even if F.16.2 was snoozed.
+        const key = 'tp-launcher-update-remind-' + CURRENT_LAUNCHER_VERSION;
         try {
             const lastDismissed = Number(localStorage.getItem(key) || 0);
-            if (lastDismissed && Date.now() - lastDismissed < snoozeMs) return;
+            if (lastDismissed && Date.now() - lastDismissed < LAUNCHER_REMINDER_MS) return;
         } catch (_) { /* Storage may be disabled; show the notice anyway. */ }
 
         const notice = document.createElement('aside');
