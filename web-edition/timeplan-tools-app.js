@@ -569,7 +569,7 @@
     // F.16.3 — Exact launcher-version matching, including unversioned legacy bookmarks.
     // Change this constant ONLY when a newly published bookmarklet must be reinstalled.
     // App-only updates do not require changing it.
-    const CURRENT_LAUNCHER_VERSION = 'F.16.4';
+    const CURRENT_LAUNCHER_VERSION = 'F.16.5';
     const LAUNCHER_REMINDER_MS = 24 * 60 * 60 * 1000;
 
     function showLauncherUpdateNotice(input) {
