@@ -311,6 +311,33 @@
     .ua-scroll-thumb:active{background:#345B7D;cursor:grabbing}
     @media(max-width:620px){.ua-scroll-shell{top:4px;margin-bottom:8px}.ua-scroll-rail{flex-basis:12px}}
     @media print{.ua-scroll-shell{position:static!important;display:block!important;box-shadow:none!important}.ua-scroll-rail{display:none!important}}
+    /* F.16.17.2 — Unified adaptive header: information left, controls top-right. */
+    .header{display:flex;flex-direction:row;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;column-gap:24px;row-gap:10px;margin-bottom:10px;padding:0;border:0}
+    .header .header-info{flex:0 1 360px;width:auto;min-width:230px;max-width:100%;align-items:flex-start}
+    .header .actions{position:static;inset:auto;flex:1 1 640px;width:auto;min-width:0;display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:flex-end;gap:8px 10px;padding:0;border:0}
+    .header .action-group{width:auto;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:7px}
+    .header .action-group+.action-group{border-left:1px solid #D5D9DE;border-top:0;padding:0 0 0 10px}
+    .header .action-group:last-child{margin-left:0}
+    .header .actions button{white-space:nowrap;min-height:35px}
+    @media(max-width:1060px){
+      .header .header-info{flex:1 1 260px}
+      .header .actions{flex:1 1 460px;justify-content:flex-end}
+    }
+    @media(max-width:780px){
+      .header{gap:9px}
+      .header .header-info{flex:1 1 100%;width:100%;min-width:0}
+      .header .actions{flex:1 1 100%;width:100%;justify-content:flex-start}
+      .header .action-group{justify-content:flex-start}
+      .header .action-group:last-child{margin-left:auto}
+    }
+    @media(max-width:620px){
+      .header .actions{padding:0;border:0;gap:7px}
+      .header .action-group{width:auto;gap:6px}
+      .header .action-group+.action-group{border-left:0;border-top:0;padding:0}
+      .header .action-group:last-child{margin-left:0}
+      .header .actions button{white-space:normal}
+    }
+    @media print{.header{display:block!important}.header .header-info{display:block!important;width:100%!important}}
     </style>
     </head>
     <body>
