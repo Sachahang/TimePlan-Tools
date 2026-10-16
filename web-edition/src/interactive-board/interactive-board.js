@@ -263,7 +263,7 @@
     function addMinutesToClock(start,mins){let total=timeMinutes(start)+Number(mins||0);total=Math.max(0,Math.min(1439,total));return String(Math.floor(total/60)).padStart(2,'0')+':'+String(total%60).padStart(2,'0')}
     // Breaks are manually scheduled on a 24-hour clock, independently of the coworker's shift.
     function normalizeBreakClock(input){
-      let value=String(input??'').trim().toLowerCase().replace(/[\x20\t\r\n]+/g,'');
+      let value=String(input??'').trim().toLowerCase().replace(/ +/g,'');
       const meridiem=value.match(/(am|pm)$/);
       if(meridiem)value=value.slice(0,-2);
       value=value.replace(/[.,]/g,':');
