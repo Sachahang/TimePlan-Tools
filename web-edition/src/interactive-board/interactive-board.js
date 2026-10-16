@@ -267,6 +267,15 @@
       .worker.has-break>.break-stack{min-width:42px}
     }
     @media print{.worker.has-break{display:block!important;max-width:none!important}.break-stack{display:none!important} @page{size:A4 landscape;margin:8mm}html,body{background:white!important}body{padding:0!important;font-size:10px}.header{min-height:auto!important;margin-bottom:8px!important;padding:0!important}.title{font-size:20px!important}.subtitle{font-size:12px!important}.plan-updated,.local-clock,.meta{font-size:9px!important}.actions,.status,.handover-reminder{display:none!important}.unassigned-sticky{position:static!important;max-height:none!important;overflow:visible!important;margin-bottom:7px!important;padding:0!important;background:transparent!important;box-shadow:none!important}.unassigned,.leadership,.area{break-inside:avoid;border-radius:5px!important;padding:5px!important}.leadership{margin-bottom:7px!important}.board{display:grid!important;grid-template-columns:repeat(var(--print-columns,3),minmax(0,1fr))!important;gap:7px!important;align-items:start}.board-column{display:contents!important}.support-flow{grid-column:auto!important}.handover-notes{break-inside:avoid!important;padding:7px!important}.handover-notes-title{font-size:10px!important;margin-bottom:5px!important}.handover-notes textarea{min-height:70px!important;padding:6px!important;font-size:9px!important;border-width:1px!important}.handover-notes-hint{display:none!important}.flow{break-inside:avoid;border-radius:5px!important}.flow-header{position:static!important;padding:7px 8px!important;font-size:11px!important;border-radius:4px 4px 0 0!important}.flow-content{gap:5px!important;padding:5px!important}.area{min-height:0!important;border-width:1px!important}.area-header{margin-bottom:4px!important;font-size:10px!important}.cards{min-height:0!important}.worker{break-inside:avoid;margin:2px!important;flex:0 1 auto!important;width:auto!important;min-width:0!important;max-width:none!important;min-height:0!important;padding:5px 6px 5px 10px!important;border-radius:5px!important;box-shadow:none!important}.worker-name{font-size:10px!important;gap:3px!important}.worker-time{margin-top:2px!important;font-size:9px!important}.worker-absence{margin-top:2px!important}.badge{height:15px!important;padding:0 4px!important;font-size:7px!important}.role-divider,.shift-divider{margin:4px 2px 2px!important;font-size:7px!important}.area-count,.flow-count{min-width:18px!important;height:18px!important;font-size:8px!important}.print-hidden{display:none!important}.compact-hint,.magnet-menu,#hideUnassigned,#showUnassigned{display:none!important}.compact-empty .cards{display:flex!important}.compact-empty{min-height:0!important}.function-bar{width:4px!important}.break-chip{display:none!important}}
+
+    /* F.16.16.1 — persistent, draggable scroll indicator for UNASSIGNED. */
+    .unassigned-sticky{scrollbar-width:none}
+    .unassigned-sticky::-webkit-scrollbar{display:none}
+    .ua-scroll-track{position:absolute;right:3px;top:5px;bottom:5px;width:11px;border-radius:8px;background:rgba(70,80,95,.12);z-index:65;touch-action:none;cursor:pointer}
+    .ua-scroll-thumb{position:absolute;left:2px;right:2px;top:0;min-height:24px;border-radius:7px;background:#697786;box-shadow:0 0 0 1px rgba(255,255,255,.5);cursor:grab;touch-action:none}
+    .ua-scroll-thumb:active{cursor:grabbing;background:#3c5269}
+    .unassigned-sticky.ua-scrollable{padding-right:16px}
+    @media print{.ua-scroll-track{display:none!important}.unassigned-sticky{padding-right:0!important}}
     </style>
     </head>
     <body>
@@ -372,6 +381,50 @@
     function cardsHTML(ws,id){if(id==='unassigned')return groupedUnassigned(ws).map(g=>'<div class="role-divider"><span>'+esc(g.label)+' &middot; '+g.workers.filter(isWorkerActive).length+'</span></div>'+g.workers.map(workerHTML).join('')).join('');let eveningAdded=false;return sortWorkers(ws).map(w=>{const evening=timeMinutes(w.effectiveStart||w.start)>=660;let d='';if(!eveningAdded&&evening){d='<div class="shift-divider"><span>Evening Team</span></div>';eveningAdded=true}return d+workerHTML(w)}).join('')}
     function makeZone(id,name,extra='area',editable=false){const ws=workersFor(id);const activeCount=ws.filter(isWorkerActive).length;if(id==='unassigned'&&unassignedCollapsed)return '<div class="'+extra+' dropzone unassigned-compact" data-area-id="'+id+'"><div class="area-header" style="margin-bottom:0"><span>'+esc(name)+' <span class="area-count">'+activeCount+'</span></span><span class="compact-hint unassigned-show">SHOW</span></div></div>';const compact=!ws.length&&id!=='unassigned';const controls=editable?'<span class="area-controls edit-only"><button class="area-control" data-area-action="rename" data-area-id="'+esc(id)+'" title="Rename area">EDIT</button><button class="area-control" data-area-action="delete" data-area-id="'+esc(id)+'" title="Delete area">DELETE</button></span>':'';const unassignedHide=id==='unassigned'?'<button class="area-control unassigned-hide" data-unassigned-hide="1" title="Collapse unassigned">HIDE</button>':'';return '<div class="'+extra+' dropzone'+(compact?' compact-empty':'')+'" data-area-id="'+id+'"><div class="area-header"><span class="area-title">'+esc(name)+'</span>'+(compact?'<span class="compact-hint">Drop here</span>':'')+controls+'<span class="area-count">'+activeCount+'</span>'+unassignedHide+'</div><div class="cards">'+cardsHTML(ws,id)+'</div></div>'}
     function render(){normalizeAssignments();document.body.classList.toggle('board-edit-mode',boardEditMode);document.body.classList.toggle('board-edit-mode',boardEditMode);document.getElementById('dateLabel').textContent=DATA.formattedDate;refreshHeaderTimes();const planned=DATA.workers.length;const available=DATA.workers.filter(isWorkerActive).length;const np=DATA.workers.filter(w=>notPresent[w.key]).length;document.getElementById('coworkerCount').textContent=planned+' planned today · '+available+' available'+(np?' · '+np+' absence':'');const uw=document.getElementById('unassignedWrapper');if(!workersFor('unassigned').length)unassignedCollapsed=true;uw.className='unassigned-sticky';uw.style.maxHeight='none';uw.style.overflowY='visible';document.getElementById('unassigned').innerHTML=makeZone('unassigned','UNASSIGNED','unassigned');document.getElementById('leadership').innerHTML=makeZone('leadership','ORDER AUDITOR - COORDINATOR','leadership');const supportWorkers=workersFor('support');const supportCount=supportWorkers.filter(isWorkerActive).length;const supportHTML=supportWorkers.length?'<section id="support" class="support-flow dropzone" data-area-id="support"><div class="area-header"><span>SUPPORT OTHER DEPARTMENTS</span><span class="area-count">'+supportCount+'</span></div><div class="cards">'+supportWorkers.map(workerHTML).join('')+'</div></section>':'';const flowHTML=g=>'<section class="flow" draggable="true" data-flow-id="'+esc(g.id)+'"><div class="flow-header"><span>'+esc(g.group)+'</span><span class="flow-controls edit-only"><button class="flow-control" data-flow-action="rename" data-flow-id="'+esc(g.id)+'">EDIT</button><button class="flow-control" data-flow-action="add-area" data-flow-id="'+esc(g.id)+'">+ AREA</button><button class="flow-control" data-flow-action="delete" data-flow-id="'+esc(g.id)+'">DELETE</button><span class="flow-count">'+g.areas.reduce((t,a)=>t+workersFor(a.id).filter(isWorkerActive).length,0)+'</span></span></div><div class="flow-content">'+g.areas.map(a=>makeZone(a.id,a.name,'area',true)).join('')+'</div></section>';const board=document.getElementById('board');const width=window.innerWidth;const columnCount=width<=760?1:(width<=1100?2:3);board.innerHTML=Array.from({length:columnCount},()=>'<div class="board-column"></div>').join('');const boardColumns=[...board.querySelectorAll('.board-column')];const blocks=boardFlows.map(g=>({html:flowHTML(g),kind:'flow'}));if(supportHTML)blocks.push({html:supportHTML,kind:'support'});blocks.forEach((block,index)=>{let target;if(index<columnCount&&block.kind==='flow'){target=boardColumns[index]}else{target=boardColumns.reduce((best,col)=>col.scrollHeight<best.scrollHeight?col:best,boardColumns[0])}target.insertAdjacentHTML('beforeend',block.html)});const notesColumn=boardColumns[boardColumns.length-1];if(notesColumn)notesColumn.insertAdjacentHTML('beforeend','<section class="handover-notes"><div class="handover-notes-title">HANDOVER NOTES</div><textarea id="handoverNotesInput" maxlength="2000" placeholder="Write notes for the next team...">'+esc(handoverNotes)+'</textarea><div class="handover-notes-hint">Saved with Share Plan for HANDOVER</div></section>');bind();const notesInput=document.getElementById('handoverNotesInput');if(notesInput)notesInput.addEventListener('input',()=>{handoverNotes=notesInput.value;setDirty()});updateSticky()}
+    // Custom indicator stays visible on macOS, where native scrollbars can auto-hide.
+    function syncUnassignedScrollIndicator(){
+      const w=document.getElementById('unassignedWrapper');
+      if(!w)return;
+      let track=w.querySelector('.ua-scroll-track');
+      const scrollable=!unassignedCollapsed&&w.scrollHeight>w.clientHeight+2;
+      w.classList.toggle('ua-scrollable',scrollable);
+      if(!scrollable){if(track)track.remove();return}
+      if(!track){
+        track=document.createElement('div');track.className='ua-scroll-track';
+        track.setAttribute('role','scrollbar');track.setAttribute('aria-label','Scroll unassigned coworkers');
+        track.setAttribute('aria-orientation','vertical');
+        track.innerHTML='<div class="ua-scroll-thumb"></div>';
+        w.appendChild(track);
+        track.addEventListener('pointerdown',e=>{
+          e.preventDefault();e.stopPropagation();
+          const thumb=track.querySelector('.ua-scroll-thumb');
+          const box=track.getBoundingClientRect();
+          const thumbBox=thumb.getBoundingClientRect();
+          const offset=e.target===thumb?e.clientY-thumbBox.top:thumbBox.height/2;
+          const move=ev=>{
+            const travel=Math.max(1,track.clientHeight-thumb.offsetHeight);
+            const ratio=Math.max(0,Math.min(1,(ev.clientY-box.top-offset)/travel));
+            w.scrollTop=ratio*(w.scrollHeight-w.clientHeight);
+            syncUnassignedScrollIndicator();
+          };
+          track.setPointerCapture(e.pointerId);
+          move(e);
+          const stop=()=>{track.removeEventListener('pointermove',move);track.removeEventListener('pointerup',stop);track.removeEventListener('pointercancel',stop)};
+          track.addEventListener('pointermove',move);
+          track.addEventListener('pointerup',stop);
+          track.addEventListener('pointercancel',stop);
+        });
+      }
+      const thumb=track.querySelector('.ua-scroll-thumb');
+      const available=track.clientHeight;
+      const height=Math.max(24,Math.round(available*w.clientHeight/w.scrollHeight));
+      const maxScroll=Math.max(1,w.scrollHeight-w.clientHeight);
+      thumb.style.height=Math.min(available,height)+'px';
+      thumb.style.top=Math.round((available-Math.min(available,height))*(w.scrollTop/maxScroll))+'px';
+      track.setAttribute('aria-valuemin','0');track.setAttribute('aria-valuemax',String(Math.round(maxScroll)));
+      track.setAttribute('aria-valuenow',String(Math.round(w.scrollTop)));
+    }
+    document.getElementById('unassignedWrapper').addEventListener('scroll',syncUnassignedScrollIndicator,{passive:true});
     function updateSticky(){
       const w=document.getElementById('unassignedWrapper');
       if(!w)return;
@@ -384,6 +437,7 @@
       w.style.overflowY=unassignedCollapsed?'visible':'auto';
       const actual=Math.ceil(w.getBoundingClientRect().height);
       document.documentElement.style.setProperty('--flow-sticky-top',(actual+(compact?9:16))+'px');
+      syncUnassignedScrollIndicator();
     }
     function positionMenu(el,m){if(!el||!m||m.style.display!=='block')return;const r=el.getBoundingClientRect();if(r.bottom<0||r.top>window.innerHeight){m.style.display='none';el.classList.remove('menu-open');return}const mr=m.getBoundingClientRect();let left=Math.min(Math.max(8,r.left),window.innerWidth-mr.width-8);let top=r.bottom+5;if(top+mr.height>window.innerHeight-8)top=Math.max(8,r.top-mr.height-5);m.style.left=left+'px';m.style.top=top+'px'}
     function repositionOpenMenu(){const el=document.querySelector('.worker.menu-open');if(el)positionMenu(el,el.querySelector('.magnet-menu'))}
