@@ -228,6 +228,44 @@
     .worker.has-break .worker-time{font-size:11px;letter-spacing:normal}
     .worker.has-break .worker-absence{margin-left:5px}
     @media(max-width:400px){.worker.has-break{column-gap:6px;padding-right:7px;max-width:100%}.worker.has-break>.break-stack{min-width:46px}}
+    /* F.16.15.2 — Compact responsive break layout.
+       Break content participates in layout; no fixed magnet heights. */
+    .worker.has-break{
+      grid-auto-rows:min-content;
+      row-gap:0;
+      column-gap:8px;
+      padding-top:7px;
+      padding-bottom:7px;
+      max-width:min(325px,100%);
+    }
+    .worker.has-break>.break-stack{
+      grid-row:1 / span 3;
+      gap:2px;
+      min-width:42px;
+      max-width:58px;
+      align-self:start;
+    }
+    .worker.has-break .break-chip{
+      width:44px;
+      height:39px;
+      min-height:0;
+      padding:2px 3px;
+      border-radius:6px;
+    }
+    .worker.has-break .break-chip .break-word{font-size:7px;line-height:9px}
+    .worker.has-break .break-chip .break-time{font-size:10px;line-height:12px}
+    .worker.has-break .break-status{
+      font-size:8px;
+      line-height:10px;
+      margin:0;
+      white-space:nowrap;
+    }
+    .worker.has-break>.worker-time{margin-top:3px}
+    .worker.has-break>.shift-status{margin-top:3px}
+    @media(max-width:420px){
+      .worker.has-break{column-gap:5px;padding-right:7px}
+      .worker.has-break>.break-stack{min-width:42px}
+    }
     @media print{.worker.has-break{display:block!important;max-width:none!important}.break-stack{display:none!important} @page{size:A4 landscape;margin:8mm}html,body{background:white!important}body{padding:0!important;font-size:10px}.header{min-height:auto!important;margin-bottom:8px!important;padding:0!important}.title{font-size:20px!important}.subtitle{font-size:12px!important}.plan-updated,.local-clock,.meta{font-size:9px!important}.actions,.status,.handover-reminder{display:none!important}.unassigned-sticky{position:static!important;max-height:none!important;overflow:visible!important;margin-bottom:7px!important;padding:0!important;background:transparent!important;box-shadow:none!important}.unassigned,.leadership,.area{break-inside:avoid;border-radius:5px!important;padding:5px!important}.leadership{margin-bottom:7px!important}.board{display:grid!important;grid-template-columns:repeat(var(--print-columns,3),minmax(0,1fr))!important;gap:7px!important;align-items:start}.board-column{display:contents!important}.support-flow{grid-column:auto!important}.handover-notes{break-inside:avoid!important;padding:7px!important}.handover-notes-title{font-size:10px!important;margin-bottom:5px!important}.handover-notes textarea{min-height:70px!important;padding:6px!important;font-size:9px!important;border-width:1px!important}.handover-notes-hint{display:none!important}.flow{break-inside:avoid;border-radius:5px!important}.flow-header{position:static!important;padding:7px 8px!important;font-size:11px!important;border-radius:4px 4px 0 0!important}.flow-content{gap:5px!important;padding:5px!important}.area{min-height:0!important;border-width:1px!important}.area-header{margin-bottom:4px!important;font-size:10px!important}.cards{min-height:0!important}.worker{break-inside:avoid;margin:2px!important;flex:0 1 auto!important;width:auto!important;min-width:0!important;max-width:none!important;min-height:0!important;padding:5px 6px 5px 10px!important;border-radius:5px!important;box-shadow:none!important}.worker-name{font-size:10px!important;gap:3px!important}.worker-time{margin-top:2px!important;font-size:9px!important}.worker-absence{margin-top:2px!important}.badge{height:15px!important;padding:0 4px!important;font-size:7px!important}.role-divider,.shift-divider{margin:4px 2px 2px!important;font-size:7px!important}.area-count,.flow-count{min-width:18px!important;height:18px!important;font-size:8px!important}.print-hidden{display:none!important}.compact-hint,.magnet-menu,#hideUnassigned,#showUnassigned{display:none!important}.compact-empty .cards{display:flex!important}.compact-empty{min-height:0!important}.function-bar{width:4px!important}.break-chip{display:none!important}}
     </style>
     </head>
