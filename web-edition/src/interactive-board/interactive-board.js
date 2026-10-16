@@ -263,14 +263,14 @@
     function addMinutesToClock(start,mins){let total=timeMinutes(start)+Number(mins||0);total=Math.max(0,Math.min(1439,total));return String(Math.floor(total/60)).padStart(2,'0')+':'+String(total%60).padStart(2,'0')}
     // Breaks are manually scheduled on a 24-hour clock, independently of the coworker's shift.
     function normalizeBreakClock(input){
-      let value=String(input??'').trim().toLowerCase().replace(/\s+/g,'');
+      let value=String(input??'').trim().toLowerCase().replace(/[\x20\t\r\n]+/g,'');
       const meridiem=value.match(/(am|pm)$/);
       if(meridiem)value=value.slice(0,-2);
       value=value.replace(/[.,]/g,':');
       let hours,minutes;
-      if(/^\d{1,2}$/.test(value)){hours=Number(value);minutes=0}
-      else if(/^\d{3,4}$/.test(value)){hours=Number(value.slice(0,-2));minutes=Number(value.slice(-2))}
-      else if(/^\d{1,2}:\d{1,2}$/.test(value)){const parts=value.split(':');hours=Number(parts[0]);minutes=Number(parts[1])}
+      if(/^[0-9]{1,2}$/.test(value)){hours=Number(value);minutes=0}
+      else if(/^[0-9]{3,4}$/.test(value)){hours=Number(value.slice(0,-2));minutes=Number(value.slice(-2))}
+      else if(/^[0-9]{1,2}:[0-9]{1,2}$/.test(value)){const parts=value.split(':');hours=Number(parts[0]);minutes=Number(parts[1])}
       else return null;
       if(meridiem){if(hours<1||hours>12)return null;hours=hours%12+(meridiem[1]==='pm'?12:0)}
       if(!Number.isInteger(hours)||!Number.isInteger(minutes)||hours<0||hours>23||minutes<0||minutes>59)return null;
